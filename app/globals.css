@@ -1,0 +1,118 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body {
+    background-color: #0a0d14;
+    color: #e2e8f0;
+    font-family: 'DM Sans', 'Segoe UI', sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  ::-webkit-scrollbar { width: 4px; height: 4px; }
+  ::-webkit-scrollbar-track  { background: #0a0d14; }
+  ::-webkit-scrollbar-thumb  { background: #2d3748; border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: #374151; }
+
+  input[type="date"]::-webkit-calendar-picker-indicator {
+    filter: invert(0.6);
+  }
+}
+
+@layer components {
+  /* Cards */
+  .card {
+    @apply bg-gradient-to-br from-[#111827] to-[#0f1623] border border-[#1f2937] rounded-[16px]
+           transition-all duration-200;
+  }
+  .card:hover { @apply border-[#2d3f57] shadow-[0_4px_24px_rgba(0,0,0,0.3)]; }
+
+  /* KPI Card */
+  .kpi-card {
+    @apply bg-gradient-to-br from-[#111827] to-[#0f1623] border border-[#1f2937] rounded-[16px]
+           p-5 relative overflow-hidden transition-all duration-200;
+  }
+  .kpi-card:hover { @apply border-[#2d3f57] -translate-y-0.5 shadow-[0_8px_32px_rgba(0,0,0,0.35)]; }
+  .kpi-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0;
+    width: 3px; height: 100%;
+    border-radius: 16px 0 0 16px;
+  }
+  .kpi-card.blue::before   { background: linear-gradient(180deg,#3b82f6,#8b5cf6); }
+  .kpi-card.green::before  { background: linear-gradient(180deg,#22c55e,#16a34a); }
+  .kpi-card.amber::before  { background: linear-gradient(180deg,#f59e0b,#d97706); }
+  .kpi-card.purple::before { background: linear-gradient(180deg,#a855f7,#7c3aed); }
+  .kpi-card.red::before    { background: linear-gradient(180deg,#ef4444,#dc2626); }
+
+  /* Stat card */
+  .stat-card {
+    @apply bg-gradient-to-br from-[#111827] to-[#0f1623] border border-[#1f2937] rounded-[16px] p-5
+           transition-all duration-200;
+  }
+
+  /* Pill badge */
+  .pill {
+    @apply inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold;
+  }
+
+  /* Row hover */
+  .row-item {
+    @apply rounded-[10px] transition-colors duration-150 cursor-pointer;
+  }
+  .row-item:hover { background: #151e2d !important; }
+
+  /* Form inputs */
+  .form-input {
+    @apply w-full bg-[#1f2937] border border-[#374151] text-[#e2e8f0] px-3 py-2 rounded-lg text-sm
+           focus:outline-none focus:ring-1 focus:ring-[#3b82f6] focus:border-[#3b82f6] transition-colors;
+  }
+  .form-label { @apply text-xs text-[#6b7280] mb-1 block; }
+
+  /* Sidebar tab */
+  .tab-btn {
+    @apply w-full flex items-center gap-2.5 px-3.5 py-2.5 rounded-[10px] border border-transparent
+           bg-transparent text-[#9ca3af] cursor-pointer text-sm font-medium mb-0.5 text-left
+           transition-all duration-150;
+  }
+  .tab-btn:hover { @apply bg-white/5 text-[#9ca3af]; }
+  .tab-btn.active {
+    @apply bg-blue-500/10 text-[#60a5fa] border-l-2 border-l-[#3b82f6];
+  }
+
+  /* Btn primario */
+  .btn-primary {
+    @apply bg-gradient-to-br from-[#3b82f6] to-[#8b5cf6] border-none text-white
+           px-5 py-2.5 rounded-[10px] cursor-pointer font-semibold text-sm
+           transition-all duration-150 hover:opacity-90 hover:-translate-y-px
+           disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  /* Typography helpers */
+  .section-title { @apply font-bold text-sm tracking-tight; }
+  .metric-label  { @apply text-[11px] text-[#6b7280] font-medium uppercase tracking-wide; }
+  .metric-value  { @apply text-[28px] font-extrabold leading-none tracking-tight; }
+}
+
+@layer utilities {
+  .animate-fade-in  { animation: fadeIn 0.35s ease forwards; }
+  .animate-slide-in { animation: slideIn 0.3s ease forwards; }
+  .animate-pulse-dot { animation: pulseDot 2s infinite; }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes slideIn {
+  from { opacity: 0; transform: translateX(-8px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+@keyframes pulseDot {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.4; }
+}

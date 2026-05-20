@@ -1,0 +1,1460 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Mokin Dashboard</title>
+  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body style="margin:0;background:#0a0d14;">
+<div id="root"></div>
+
+<script type="text/babel">
+const { useState, useEffect, useCallback } = React;
+
+const API_URL = "";  // mismo origen (localhost:8000)
+const REFRESH_INTERVAL_MS = 60 * 60 * 1000; // 1 hora
+
+const MOCK_DATA = {
+  ventas: { hoy: 147320, semana: 892400, mes: 3241800, variacion: 12.4 },
+  pedidos: { pendientes: 23, enCamino: 41, entregados: 189, cancelados: 3 },
+  stock: { alertas: 4, productos: [
+    { nombre: "Zapatillas Running Pro", stock: 3, minimo: 10, canales: ["tiendanube"], sku: "ZAP-001" },
+    { nombre: "Remera Oversize Negra",  stock: 0, minimo: 20, canales: ["tiendanube"], sku: "REM-042" },
+    { nombre: "Mochila Urbana 30L",     stock: 5, minimo: 15, canales: ["tiendanube"], sku: "MOC-018" },
+    { nombre: "Campera Impermeable",    stock: 2, minimo: 8,  canales: ["tiendanube"], sku: "CAM-007" },
+  ]},
+  envios: [
+    { id: "TN-1821", cliente: "María G.",  producto: "Zapatillas Running Pro", estado: "en_camino", courier: "OCA",         eta: "Hoy 18hs",  ciudad: "Rosario" },
+    { id: "TN-1820", cliente: "Carlos R.", producto: "Mochila Urbana 30L",     estado: "en_camino", courier: "Andreani",    eta: "Mañana",    ciudad: "Córdoba" },
+    { id: "TN-1819", cliente: "Laura M.",  producto: "Remera Oversize",        estado: "entregado", courier: "OCA",         eta: "Entregado", ciudad: "CABA"    },
+    { id: "TN-1818", cliente: "Diego F.",  producto: "Campera Impermeable",    estado: "pendiente", courier: "Correo Arg.", eta: "2-3 días",  ciudad: "Mendoza" },
+  ],
+  clientes: { total: 1842, nuevos: 34, recurrentes: 68, nps: 72 },
+  canales: [
+    { nombre: "Mercado Libre", ventas: 1820400, pedidos: 134, color: "#FFE600", icon: "ML" },
+    { nombre: "Tienda Nube",   ventas: 890200,  pedidos: 67,  color: "#00c8ff", icon: "TN" },
+  ],
+  graficaSemana: [82000, 134000, 98000, 156000, 189000, 142000, 91000],
+  ultima_actualizacion: new Date().toISOString(),
+};
+
+const formatARS = (n) => `$${Math.round(n || 0).toLocaleString("es-AR")}`;
+
+const estadoConfig = {
+  en_camino: { label: "En camino",  color: "#3b82f6", bg: "#1e3a5f" },
+  entregado: { label: "Entregado",  color: "#22c55e", bg: "#14532d" },
+  pendiente: { label: "Pendiente",  color: "#f59e0b", bg: "#451a03" },
+  problema:  { label: "Problema",   color: "#ef4444", bg: "#450a0a" },
+};
+
+const canalIcons = { meli: "ML", tiendanube: "TN", tiendaoficial: "TO" };
+
+// ─── Loading ────────────────────────────────────────────────────────────────
+function LoadingScreen() {
+  return (
+    <div style={{
+      minHeight: "100vh", background: "#0a0d14", display: "flex",
+      alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 20
+    }}>
+      <div style={{
+        width: 48, height: 48, borderRadius: 14,
+        background: "linear-gradient(135deg,#3b82f6,#8b5cf6)",
+        display: "flex", alignItems: "center", justifyContent: "center", fontSize: 26
+      }}>⚡</div>
+      <div style={{ color: "#6b7280", fontSize: 14 }}>Cargando datos...</div>
+    </div>
+  );
+}
+
+// ─── Error ──────────────────────────────────────────────────────────────────
+function ErrorScreen({ error, onRetry }) {
+  return (
+    <div style={{
+      minHeight: "100vh", background: "#0a0d14", display: "flex",
+      alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 16
+    }}>
+      <div style={{ fontSize: 40 }}>⚠️</div>
+      <div style={{ color: "#ef4444", fontSize: 15 }}>Error al cargar datos</div>
+      <div style={{ color: "#6b7280", fontSize: 12, maxWidth: 400, textAlign: "center" }}>{error}</div>
+      <button onClick={onRetry} style={{
+        background: "linear-gradient(135deg,#3b82f6,#8b5cf6)", border: "none",
+        color: "white", padding: "10px 24px", borderRadius: 10, cursor: "pointer", fontSize: 14
+      }}>Reintentar</button>
+    </div>
+  );
+}
+
+// ─── LineChart SVG ───────────────────────────────────────────────────────────
+function LineChart({ values = [], days = [], color = "#3b82f6" }) {
+  const W = 400, H = 110, PX = 14, PY = 12;
+  const max = Math.max(...values, 1);
+  const pts = values.map((v, i) => ({
+    x: PX + (i / Math.max(values.length - 1, 1)) * (W - PX * 2),
+    y: PY + (1 - v / max) * (H - PY * 2),
+  }));
+  let linePath = pts.map((p, i) => (i === 0 ? `M${p.x},${p.y}` : `C${(pts[i-1].x+p.x)/2},${pts[i-1].y} ${(pts[i-1].x+p.x)/2},${p.y} ${p.x},${p.y}`)).join(" ");
+  const areaPath = linePath + ` L${pts[pts.length-1].x},${H} L${pts[0].x},${H} Z`;
+  const gid = "lg" + color.replace("#","");
+  const [hovered, setHovered] = useState(null);
+  return (
+    <div style={{ position:"relative" }}>
+      <svg viewBox={`0 0 ${W} ${H}`} style={{ width:"100%", height:H, display:"block" }}>
+        <defs>
+          <linearGradient id={gid} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={color} stopOpacity="0.25"/>
+            <stop offset="100%" stopColor={color} stopOpacity="0.02"/>
+          </linearGradient>
+        </defs>
+        {[0.33, 0.66].map((p,i) => (
+          <line key={i} x1={PX} y1={PY + p*(H-PY*2)} x2={W-PX} y2={PY + p*(H-PY*2)} stroke="#1f2937" strokeWidth="1" strokeDasharray="4 4"/>
+        ))}
+        <path d={areaPath} fill={`url(#${gid})`}/>
+        <path d={linePath} fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
+        {pts.map((p, i) => (
+          <g key={i} style={{cursor:"pointer"}}
+            onMouseEnter={() => setHovered(i)}
+            onMouseLeave={() => setHovered(null)}>
+            <circle cx={p.x} cy={p.y} r={hovered===i ? 6 : 3.5} fill={hovered===i ? "#fff" : color} stroke={color} strokeWidth="2" style={{transition:"r 0.15s"}}/>
+            <circle cx={p.x} cy={p.y} r="14" fill="transparent"/>
+          </g>
+        ))}
+        {pts.map((p, i) => (
+          <text key={i} x={p.x} y={H} textAnchor="middle" fill="#4b5563" fontSize="10">{days[i]}</text>
+        ))}
+        {hovered !== null && (
+          <g>
+            <rect x={pts[hovered].x - 38} y={pts[hovered].y - 30} width="76" height="22" rx="6" fill="#1f2937" stroke={color} strokeWidth="1" strokeOpacity="0.4"/>
+            <text x={pts[hovered].x} y={pts[hovered].y - 14} textAnchor="middle" fill="#e2e8f0" fontSize="11" fontWeight="600">
+              {`$${Math.round(values[hovered]).toLocaleString("es-AR")}`}
+            </text>
+          </g>
+        )}
+      </svg>
+    </div>
+  );
+}
+
+// ─── DonutChart SVG ──────────────────────────────────────────────────────────
+function DonutChart({ segments }) {
+  const R = 52, CX = 64, CY = 64, SW = 15;
+  const C = 2 * Math.PI * R;
+  const total = segments.reduce((s, g) => s + g.value, 0) || 1;
+  let used = 0;
+  return (
+    <svg viewBox="0 0 128 128" style={{ width:120, height:120, flexShrink:0 }}>
+      <circle cx={CX} cy={CY} r={R} fill="none" stroke="#1f2937" strokeWidth={SW}/>
+      {segments.map((seg, i) => {
+        const pct = seg.value / total;
+        const dash = Math.max(pct * C - 3, 0);
+        const offset = C / 4 - used * C;
+        used += pct;
+        return (
+          <circle key={i} cx={CX} cy={CY} r={R} fill="none"
+            stroke={seg.color} strokeWidth={SW}
+            strokeDasharray={`${dash} ${C}`}
+            strokeDashoffset={offset}
+            strokeLinecap="round"/>
+        );
+      })}
+      <text x={CX} y={CY - 6} textAnchor="middle" fill="#e2e8f0" fontSize="13" fontWeight="700">
+        {segments.length}
+      </text>
+      <text x={CX} y={CY + 10} textAnchor="middle" fill="#6b7280" fontSize="9">canales</text>
+    </svg>
+  );
+}
+
+// ─── Gastos mock storage (localStorage) ─────────────────────────────────────
+const GASTOS_KEY = "mokin_gastos";
+const RUBROS = ["Envíos", "Comisiones ML", "Comisiones TN", "Publicidad", "Packaging", "Sueldos", "Impuestos", "Otros"];
+
+function loadGastos() {
+  try { return JSON.parse(localStorage.getItem(GASTOS_KEY) || "[]"); } catch { return []; }
+}
+function saveGastos(g) {
+  localStorage.setItem(GASTOS_KEY, JSON.stringify(g));
+}
+
+// ─── Funnel component ────────────────────────────────────────────────────────
+function Funnel({ steps }) {
+  const max = steps[0]?.valor || 1;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 6, padding: "8px 0" }}>
+      {steps.map((s, i) => {
+        const pct = Math.round((s.valor / max) * 100);
+        const width = 40 + pct * 0.6;
+        return (
+          <div key={i} style={{ display: "flex", alignItems: "center", gap: 14 }}>
+            <div style={{ width: 130, fontSize: 12, color: "#9ca3af", textAlign: "right" }}>{s.label}</div>
+            <div style={{ flex: 1, display: "flex", alignItems: "center", gap: 10 }}>
+              <div style={{
+                width: `${width}%`, height: 36, borderRadius: 6,
+                background: `linear-gradient(90deg, #3b82f6, #8b5cf6)`,
+                opacity: 0.3 + (pct / 100) * 0.7,
+                display: "flex", alignItems: "center", paddingLeft: 12,
+                transition: "width 0.8s ease"
+              }}>
+                <span style={{ fontSize: 13, fontWeight: 700, color: "white" }}>
+                  {s.valor.toLocaleString("es-AR")}
+                </span>
+              </div>
+              <span style={{ fontSize: 11, color: "#6b7280", whiteSpace: "nowrap" }}>{pct}%</span>
+            </div>
+            {i < steps.length - 1 && (
+              <div style={{ position: "absolute", right: 0 }}></div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ─── App ────────────────────────────────────────────────────────────────────
+function App() {
+  const [data, setData]           = useState(null);
+  const [loading, setLoading]     = useState(true);
+  const [error, setError]         = useState(null);
+  const [activeTab, setActiveTab]   = useState("dashboard");
+  const [refreshing, setRefreshing] = useState(false);
+  const [periodo, setPeriodo]       = useState("mes");
+  const [gastos, setGastos]       = useState(loadGastos);
+  const [gastoForm, setGastoForm] = useState({ rubro: RUBROS[0], monto: "", descripcion: "", fecha: new Date().toISOString().slice(0,10) });
+
+  // ── Rentabilidad ──────────────────────────────────────────────────────────
+  const [rentConfig, setRentConfig] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("mokin_rent") || '{"costoPct":40}'); } catch { return {costoPct:40}; }
+  });
+  const [comprasUSD, setComprasUSD] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("mokin_usd") || "[]"); } catch { return []; }
+  });
+  const [usdForm, setUsdForm] = useState({ fecha: new Date().toISOString().slice(0,10), usd:"", tc:"", descripcion:"" });
+
+  // ── Proveedores ───────────────────────────────────────────────────────────
+  const [proveedores, setProveedores] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("mokin_prov") || "[]"); } catch { return []; }
+  });
+  const [provForm, setProvForm] = useState({ nombre:"", contacto:"", rubro:"", saldo:"" });
+  const [provExpandido, setProvExpandido] = useState(null);
+  const [novedadForm, setNovedadForm] = useState({ texto:"", tipo:"info" });
+
+  const fetchData = useCallback(async (p = periodo) => {
+    try {
+      const res = await fetch(`${API_URL}/api/data?periodo=${p}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const json = await res.json();
+      setData(json);
+      setError(null);
+    } catch (e) {
+      setData(prev => prev || MOCK_DATA);
+      setError(e.message);
+    } finally {
+      setLoading(false);
+    }
+  }, [periodo]);
+
+  const cambiarPeriodo = (p) => {
+    setPeriodo(p);
+    setLoading(true);
+    fetchData(p);
+  };
+
+  const forceRefresh = async () => {
+    setRefreshing(true);
+    try {
+      await fetch(`${API_URL}/api/refresh?periodo=${periodo}`, { method: "POST" });
+      await fetchData(periodo);
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchData(periodo);
+    const interval = setInterval(() => fetchData(periodo), REFRESH_INTERVAL_MS);
+    return () => clearInterval(interval);
+  }, [fetchData]);
+
+  if (loading) return <LoadingScreen />;
+  if (error && !data) return <ErrorScreen error={error} onRetry={fetchData} />;
+
+  const maxVenta = data?.graficaSemana ? Math.max(...data.graficaSemana) : 1;
+  const dias = ["L", "M", "X", "J", "V", "S", "D"];
+
+  const tabs = [
+    { id: "dashboard",  label: "Dashboard",  icon: "⊞" },
+    { id: "stock",      label: "Stock",      icon: "📦" },
+    { id: "envios",     label: "Envíos",     icon: "🚚" },
+    { id: "impositivo", label: "ARCA",       icon: "📋" },
+    { id: "clientes",   label: "Clientes",   icon: "👥" },
+    { id: "gastos",        label: "Gastos",        icon: "💸" },
+    { id: "publicidad",    label: "Publicidad",    icon: "📣" },
+    { id: "rentabilidad",  label: "Rentabilidad",  icon: "📈" },
+    { id: "proveedores",   label: "Proveedores",   icon: "🤝" },
+  ];
+
+  // ── Gastos helpers ──────────────────────────────────────────────────────────
+  const agregarGasto = () => {
+    if (!gastoForm.monto || isNaN(parseFloat(gastoForm.monto))) return;
+    const nuevo = { ...gastoForm, monto: parseFloat(gastoForm.monto), id: Date.now() };
+    const updated = [nuevo, ...gastos];
+    saveGastos(updated);
+    setGastos(updated);
+    setGastoForm(f => ({ ...f, monto: "", descripcion: "" }));
+  };
+  const eliminarGasto = (id) => {
+    const updated = gastos.filter(g => g.id !== id);
+    saveGastos(updated);
+    setGastos(updated);
+  };
+  const totalGastos = gastos.reduce((s, g) => s + g.monto, 0);
+  const gastosPorRubro = RUBROS.map(r => ({
+    rubro: r,
+    total: gastos.filter(g => g.rubro === r).reduce((s, g) => s + g.monto, 0),
+  })).filter(r => r.total > 0).sort((a,b) => b.total - a.total);
+
+  // ── Rentabilidad helpers ────────────────────────────────────────────────────
+  const ingresos       = data?.ventas?.mes || 0;
+  const costoMerch     = ingresos * (rentConfig.costoPct / 100);
+  const utilBruta      = ingresos - costoMerch;
+  const estructura     = totalGastos;
+  const utilNeta       = utilBruta - estructura;
+  const margenBruto    = ingresos > 0 ? (utilBruta / ingresos * 100) : 0;
+  const margenNeto     = ingresos > 0 ? (utilNeta  / ingresos * 100) : 0;
+  const totalUSD       = comprasUSD.reduce((s,c) => s + parseFloat(c.usd||0), 0);
+  const totalPesosUSD  = comprasUSD.reduce((s,c) => s + parseFloat(c.usd||0)*parseFloat(c.tc||0), 0);
+  const tcPromedio     = totalUSD > 0 ? totalPesosUSD / totalUSD : 0;
+  const cajaEstimada   = ingresos - estructura;   // simplificado: ingresos cobrados - gastos
+
+  const agregarUSD = () => {
+    if (!usdForm.usd || !usdForm.tc) return;
+    const nueva = { ...usdForm, id: Date.now(), usd: parseFloat(usdForm.usd), tc: parseFloat(usdForm.tc) };
+    const updated = [nueva, ...comprasUSD];
+    localStorage.setItem("mokin_usd", JSON.stringify(updated));
+    setComprasUSD(updated);
+    setUsdForm(f => ({ ...f, usd:"", tc:"", descripcion:"" }));
+  };
+  const eliminarUSD = (id) => {
+    const updated = comprasUSD.filter(c => c.id !== id);
+    localStorage.setItem("mokin_usd", JSON.stringify(updated));
+    setComprasUSD(updated);
+  };
+
+  // ── Proveedores helpers ────────────────────────────────────────────────────
+  const agregarProveedor = () => {
+    if (!provForm.nombre.trim()) return;
+    const nuevo = { ...provForm, id: Date.now(), saldo: parseFloat(provForm.saldo||0), novedades: [] };
+    const updated = [nuevo, ...proveedores];
+    localStorage.setItem("mokin_prov", JSON.stringify(updated));
+    setProveedores(updated);
+    setProvForm({ nombre:"", contacto:"", rubro:"", saldo:"" });
+  };
+  const eliminarProveedor = (id) => {
+    const updated = proveedores.filter(p => p.id !== id);
+    localStorage.setItem("mokin_prov", JSON.stringify(updated));
+    setProveedores(updated);
+    if (provExpandido === id) setProvExpandido(null);
+  };
+  const agregarNovedad = (provId) => {
+    if (!novedadForm.texto.trim()) return;
+    const updated = proveedores.map(p => p.id === provId
+      ? { ...p, novedades: [{ ...novedadForm, id: Date.now(), fecha: new Date().toLocaleDateString("es-AR") }, ...p.novedades] }
+      : p
+    );
+    localStorage.setItem("mokin_prov", JSON.stringify(updated));
+    setProveedores(updated);
+    setNovedadForm({ texto:"", tipo:"info" });
+  };
+  const actualizarSaldo = (provId, saldo) => {
+    const updated = proveedores.map(p => p.id === provId ? { ...p, saldo: parseFloat(saldo||0) } : p);
+    localStorage.setItem("mokin_prov", JSON.stringify(updated));
+    setProveedores(updated);
+  };
+  const totalDeuda = proveedores.reduce((s,p) => s + (p.saldo||0), 0);
+  const novedadesRecientes = proveedores.flatMap(p => (p.novedades||[]).slice(0,1).map(n => ({...n, proveedor:p.nombre}))).slice(0,5);
+
+  // ── Publicidad funnel (mockup — listo para Meta Ads) ───────────────────────
+  const funnelSteps = [
+    { label: "Alcance",        valor: 48200  },
+    { label: "Impresiones",    valor: 31500  },
+    { label: "Clics al anuncio",valor: 4820  },
+    { label: "Visitas a tienda",valor: 3210  },
+    { label: "Iniciaron pago", valor: 890    },
+    { label: "Compras",        valor: 312    },
+  ];
+
+  const campañasMock = [
+    { nombre: "Zapatillas Running — Conversiones", estado: "activa", presupuesto: 8500, gastado: 6230, roas: 4.2, cpc: 180, ctr: "2.8%", conversiones: 34 },
+    { nombre: "Remeras Temporada — Alcance",       estado: "activa", presupuesto: 5000, gastado: 5000, roas: 3.1, cpc: 210, ctr: "1.9%", conversiones: 18 },
+    { nombre: "Mochilas — Retargeting",            estado: "pausada",presupuesto: 3000, gastado: 1200, roas: 5.8, cpc: 95,  ctr: "4.1%", conversiones: 12 },
+  ];
+
+  const ultimaActualizacion = data?.ultima_actualizacion
+    ? new Date(data.ultima_actualizacion).toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" })
+    : "--:--";
+
+  return (
+    <div style={{
+      minHeight: "100vh", background: "#0a0d14",
+      fontFamily: "'DM Sans','Segoe UI',sans-serif", color: "#e2e8f0", display: "flex"
+    }}>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;0,9..40,800&family=DM+Mono:wght@400;500&display=swap');
+        * { box-sizing:border-box; margin:0; padding:0; }
+        ::-webkit-scrollbar { width:4px; }
+        ::-webkit-scrollbar-track { background:#0a0d14; }
+        ::-webkit-scrollbar-thumb { background:#2d3748; border-radius:4px; }
+
+        .tab-btn { transition: all 0.15s ease !important; }
+        .tab-btn:hover { background:rgba(99,179,237,0.07) !important; color:#9ca3af !important; }
+        .tab-btn.active { background:rgba(59,130,246,0.1) !important; color:#60a5fa !important; border-left:2px solid #3b82f6 !important; }
+
+        .card {
+          background: linear-gradient(145deg, #111827 0%, #0f1623 100%);
+          border: 1px solid #1f2937;
+          border-radius: 16px;
+          transition: border-color 0.2s, box-shadow 0.2s;
+        }
+        .card:hover { border-color:#2d3f57; box-shadow: 0 4px 24px rgba(0,0,0,0.3); }
+
+        .kpi-card {
+          background: linear-gradient(145deg, #111827 0%, #0f1623 100%);
+          border: 1px solid #1f2937;
+          border-radius: 16px;
+          padding: 20px;
+          position: relative;
+          overflow: hidden;
+          transition: border-color 0.2s, transform 0.2s, box-shadow 0.2s;
+        }
+        .kpi-card:hover { border-color:#2d3f57; transform: translateY(-2px); box-shadow: 0 8px 32px rgba(0,0,0,0.35); }
+        .kpi-card::before {
+          content: '';
+          position: absolute;
+          top: 0; left: 0;
+          width: 3px; height: 100%;
+          border-radius: 16px 0 0 16px;
+        }
+        .kpi-card.blue::before   { background: linear-gradient(180deg,#3b82f6,#8b5cf6); }
+        .kpi-card.green::before  { background: linear-gradient(180deg,#22c55e,#16a34a); }
+        .kpi-card.amber::before  { background: linear-gradient(180deg,#f59e0b,#d97706); }
+        .kpi-card.purple::before { background: linear-gradient(180deg,#a855f7,#7c3aed); }
+        .kpi-card.red::before    { background: linear-gradient(180deg,#ef4444,#dc2626); }
+
+        .pill { display:inline-flex; align-items:center; gap:4px; padding:2px 10px; border-radius:20px; font-size:11px; font-weight:600; }
+        .row-item { transition: background 0.15s; border-radius: 10px; }
+        .row-item:hover { background:#151e2d !important; }
+        .badge { background:#ef4444; color:white; border-radius:50%; width:18px; height:18px; display:flex; align-items:center; justify-content:center; font-size:10px; font-weight:700; }
+
+        @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+        .pulse { animation:pulse 2s infinite; }
+        @keyframes fadeIn { from{opacity:0;transform:translateY(10px)} to{opacity:1;transform:translateY(0)} }
+        .fade-in { animation:fadeIn 0.35s ease forwards; }
+        @keyframes slideIn { from{opacity:0;transform:translateX(-8px)} to{opacity:1;transform:translateX(0)} }
+        .slide-in { animation:slideIn 0.3s ease forwards; }
+        @keyframes spin { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }
+        .spin { animation:spin 1s linear infinite; display:inline-block; }
+
+        .section-title { font-weight:700; font-size:13px; letter-spacing:-0.2px; }
+        .section-sub   { font-size:12px; color:#4b5563; margin-top:2px; }
+        .metric-label  { font-size:11px; color:#6b7280; font-weight:500; letter-spacing:0.2px; text-transform:uppercase; }
+        .metric-value  { font-size:28px; font-weight:800; letter-spacing:-1.5px; line-height:1; }
+        .metric-sub    { font-size:12px; margin-top:6px; font-weight:500; }
+      `}</style>
+
+      {/* ── Sidebar ── */}
+      <div style={{
+        width:220, background:"#0d1117", borderRight:"1px solid #1f2937",
+        display:"flex", flexDirection:"column", position:"fixed", height:"100vh", zIndex:10
+      }}>
+        <div style={{ padding:"24px 20px 20px", borderBottom:"1px solid #1f2937" }}>
+          <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+            <div style={{
+              width:36, height:36, borderRadius:10,
+              background:"linear-gradient(135deg,#3b82f6,#8b5cf6)",
+              display:"flex", alignItems:"center", justifyContent:"center", fontSize:18
+            }}>⚡</div>
+            <div>
+              <div style={{ fontWeight:700, fontSize:15, letterSpacing:"-0.3px" }}>FlowCRM</div>
+              <div style={{ fontSize:11, color:"#6b7280" }}>para Pymes AR</div>
+            </div>
+          </div>
+        </div>
+
+        <div style={{ padding:"16px 20px", borderBottom:"1px solid #1f2937" }}>
+          <div style={{ fontSize:11, color:"#6b7280", marginBottom:6, textTransform:"uppercase", letterSpacing:"0.8px" }}>Empresa</div>
+          <div style={{ fontWeight:600, fontSize:13 }}>Mokin</div>
+          <div style={{ fontSize:11, color:"#22c55e", display:"flex", alignItems:"center", gap:4, marginTop:2 }}>
+            <span className="pulse" style={{ width:6, height:6, borderRadius:"50%", background:"#22c55e", display:"inline-block" }}></span>
+            Plan Pro · Activo
+          </div>
+        </div>
+
+        <nav style={{ flex:1, padding:"12px 10px" }}>
+          {tabs.map(t => (
+            <button
+              key={t.id}
+              className={`tab-btn ${activeTab === t.id ? "active" : ""}`}
+              onClick={() => setActiveTab(t.id)}
+              style={{
+                width:"100%", display:"flex", alignItems:"center", gap:10,
+                padding:"10px 14px", borderRadius:10, border:"1px solid transparent",
+                background:"transparent", color: activeTab === t.id ? "#63b3ed" : "#9ca3af",
+                cursor:"pointer", fontSize:13, fontWeight:500,
+                marginBottom:2, textAlign:"left", transition:"all 0.15s",
+                borderLeft: activeTab === t.id ? "2px solid #63b3ed" : "2px solid transparent"
+              }}
+            >
+              <span style={{ fontSize:15 }}>{t.icon}</span>
+              {t.label}
+              {t.id === "stock" && (data?.stock?.alertas || 0) > 0 && (
+                <span className="badge" style={{ marginLeft:"auto" }}>{data.stock.alertas}</span>
+              )}
+            </button>
+          ))}
+        </nav>
+
+        {/* Última actualización */}
+        <div style={{ padding:"12px 20px", borderTop:"1px solid #1f2937" }}>
+          <div style={{ fontSize:10, color:"#4b5563", marginBottom:6 }}>
+            Actualizado: {ultimaActualizacion}
+          </div>
+          <button
+            onClick={forceRefresh}
+            disabled={refreshing}
+            style={{
+              width:"100%", background:"#1f2937", border:"1px solid #374151",
+              color: refreshing ? "#4b5563" : "#9ca3af", padding:"7px",
+              borderRadius:8, cursor: refreshing ? "default" : "pointer", fontSize:12
+            }}
+          >
+            {refreshing ? <span className="spin">↻</span> : "↻"} Actualizar ahora
+          </button>
+        </div>
+      </div>
+
+      {/* ── Main ── */}
+      <div style={{ marginLeft:220, flex:1, display:"flex", flexDirection:"column" }}>
+        {/* Topbar */}
+        <div style={{
+          height:60, background:"#0d1117", borderBottom:"1px solid #1f2937",
+          display:"flex", alignItems:"center", justifyContent:"space-between",
+          padding:"0 28px", position:"sticky", top:0, zIndex:5, gap:16
+        }}>
+          {/* Título */}
+          <div style={{ display:"flex", alignItems:"center", gap:10, flexShrink:0 }}>
+            <span style={{ fontSize:17, fontWeight:700 }}>
+              {tabs.find(t => t.id === activeTab)?.label}
+            </span>
+            <span style={{ color:"#374151", fontSize:13 }}>
+              · {new Date().toLocaleDateString("es-AR", { day:"numeric", month:"short" })}
+            </span>
+          </div>
+
+          {/* Selector de período */}
+          <div style={{ display:"flex", gap:4, background:"#0d1117", border:"1px solid #1f2937", borderRadius:10, padding:3 }}>
+            {[
+              { id:"hoy",    label:"Hoy"     },
+              { id:"semana", label:"Semana"  },
+              { id:"mes",    label:"Mes"     },
+              { id:"30d",    label:"30 días" },
+            ].map(p => (
+              <button key={p.id} onClick={() => cambiarPeriodo(p.id)} style={{
+                padding:"5px 14px", borderRadius:7, border:"none", cursor:"pointer",
+                fontSize:12, fontWeight:600, transition:"all 0.15s",
+                background: periodo === p.id ? "linear-gradient(135deg,#3b82f6,#8b5cf6)" : "transparent",
+                color:       periodo === p.id ? "#fff" : "#6b7280",
+              }}>
+                {p.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Estado / error */}
+          {error
+            ? <div style={{ fontSize:11, color:"#f59e0b", background:"#451a0322", border:"1px solid #f59e0b44", padding:"4px 12px", borderRadius:20, flexShrink:0 }}>
+                ⚠ Sin conexión al backend
+              </div>
+            : <div style={{ fontSize:11, color:"#4b5563", flexShrink:0 }}>
+                {data?.periodo_label || "Este mes"}
+              </div>
+          }
+        </div>
+
+        {/* Content */}
+        <div style={{ padding:"24px 28px", flex:1, overflowY:"auto" }} className="fade-in">
+
+          {/* ══════ DASHBOARD ══════ */}
+          {activeTab === "dashboard" && (
+            <div style={{ display:"flex", flexDirection:"column", gap:20 }}>
+
+              {/* KPIs */}
+              <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:14 }}>
+                {[
+                  { label:"Ventas hoy",      value: formatARS(data?.ventas?.hoy),   sub:`${(data?.ventas?.variacion||0)>=0?"+":""}${data?.ventas?.variacion||0}% vs ayer`, subColor:(data?.ventas?.variacion||0)>=0?"#22c55e":"#ef4444", accent:"blue",   icon:"💰" },
+                  { label:"Pedidos activos", value:(data?.pedidos?.pendientes||0)+(data?.pedidos?.enCamino||0), sub:`${data?.pedidos?.pendientes||0} pendientes · ${data?.pedidos?.enCamino||0} en camino`, subColor:"#f59e0b", accent:"amber",  icon:"📦" },
+                  { label:"Ventas del mes",  value: formatARS(data?.ventas?.mes),   sub:"Período actual",  subColor:"#60a5fa", accent:"blue",   icon:"📅" },
+                  { label:"Ventas semana",   value: formatARS(data?.ventas?.semana),sub:"Últimos 7 días",   subColor:"#c084fc", accent:"purple", icon:"📊" },
+                ].map((kpi, i) => (
+                  <div key={i} className={`kpi-card ${kpi.accent}`}>
+                    <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
+                      <div style={{ paddingLeft:8 }}>
+                        <div className="metric-label" style={{ marginBottom:10 }}>{kpi.label}</div>
+                        <div className="metric-value" style={{ color:"#f1f5f9" }}>{kpi.value}</div>
+                        <div className="metric-sub" style={{ color:kpi.subColor }}>{kpi.sub}</div>
+                      </div>
+                      <div style={{
+                        width:40, height:40, borderRadius:10, fontSize:18,
+                        display:"flex", alignItems:"center", justifyContent:"center",
+                        background:"rgba(255,255,255,0.04)", border:"1px solid rgba(255,255,255,0.06)"
+                      }}>{kpi.icon}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div style={{ display:"grid", gridTemplateColumns:"1.2fr 1fr", gap:16 }}>
+                {/* Línea semanal */}
+                <div className="card" style={{ padding:22 }}>
+                  <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16 }}>
+                    <div>
+                      <div className="section-title">Ventas esta semana</div>
+                      <div className="section-sub">{formatARS(data?.ventas?.semana)} total</div>
+                    </div>
+                    <div style={{
+                      fontSize:12, fontWeight:600, padding:"4px 12px", borderRadius:20,
+                      background: (data?.ventas?.variacion||0)>=0 ? "#14532d55" : "#450a0a55",
+                      color:       (data?.ventas?.variacion||0)>=0 ? "#22c55e"   : "#ef4444",
+                      border:     `1px solid ${(data?.ventas?.variacion||0)>=0 ? "#22c55e44" : "#ef444444"}`,
+                    }}>
+                      {(data?.ventas?.variacion||0)>=0?"↑":"↓"} {Math.abs(data?.ventas?.variacion||0)}%
+                    </div>
+                  </div>
+                  <LineChart values={data?.graficaSemana || Array(7).fill(0)} days={dias} color="#3b82f6"/>
+                </div>
+
+                {/* Canales — Donut */}
+                <div className="card" style={{ padding:22 }}>
+                  <div className="section-title" style={{ marginBottom:16 }}>Canales de venta</div>
+                  <div style={{ display:"flex", alignItems:"center", gap:20 }}>
+                    <DonutChart segments={(data?.canales||[]).map(c=>({value:c.ventas,color:c.color}))}/>
+                    <div style={{ flex:1, display:"flex", flexDirection:"column", gap:10 }}>
+                      {(data?.canales||[]).map((c,i) => {
+                        const pct = data?.ventas?.mes > 0 ? Math.round((c.ventas/data.ventas.mes)*100) : 0;
+                        return (
+                          <div key={i}>
+                            <div style={{ display:"flex", justifyContent:"space-between", marginBottom:5 }}>
+                              <div style={{ display:"flex", alignItems:"center", gap:7 }}>
+                                <span style={{ width:8, height:8, borderRadius:"50%", background:c.color, display:"inline-block", flexShrink:0 }}></span>
+                                <span style={{ fontSize:12, fontWeight:500 }}>{c.nombre}</span>
+                              </div>
+                              <span style={{ fontSize:12, fontWeight:700, color:c.color }}>{pct}%</span>
+                            </div>
+                            <div style={{ fontSize:11, color:"#4b5563", paddingLeft:15 }}>
+                              {formatARS(c.ventas)} · {c.pedidos} pedidos
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Alertas + Últimos envíos */}
+              <div style={{ display:"grid", gridTemplateColumns:"1fr 1.5fr", gap:16 }}>
+                <div className="card" style={{ padding:22 }}>
+                  <div style={{ fontWeight:600, fontSize:14, marginBottom:14 }}>⚠️ Alertas activas</div>
+                  <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+                    {[
+                      { msg:`${data?.stock?.alertas||0} productos con stock bajo`, color:"#f59e0b", bg:"#451a03", activa:(data?.stock?.alertas||0)>0 },
+                      { msg:`${data?.pedidos?.pendientes||0} pedidos pendientes de despacho`, color:"#3b82f6", bg:"#1e3a5f", activa:(data?.pedidos?.pendientes||0)>0 },
+                      { msg:"Sincronizado con TN y ML", color:"#22c55e", bg:"#14532d", activa:true },
+                    ].filter(a => a.activa).map((a, i) => (
+                      <div key={i} style={{
+                        padding:"10px 14px", borderRadius:10,
+                        background:a.bg+"88", border:`1px solid ${a.color}33`,
+                        display:"flex", alignItems:"center", gap:10
+                      }}>
+                        <span style={{ width:8, height:8, borderRadius:"50%", background:a.color, flexShrink:0 }}></span>
+                        <span style={{ fontSize:13, color:a.color }}>{a.msg}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="card" style={{ padding:22 }}>
+                  <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14 }}>
+                    <div style={{ fontWeight:600, fontSize:14 }}>Últimos envíos</div>
+                    <button onClick={() => setActiveTab("envios")} style={{
+                      background:"none", border:"none", color:"#3b82f6", cursor:"pointer", fontSize:12
+                    }}>Ver todos →</button>
+                  </div>
+                  <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+                    {(data?.envios || []).slice(0,4).map((e, i) => {
+                      const st = estadoConfig[e.estado] || estadoConfig.pendiente;
+                      return (
+                        <div key={i} className="row-item" style={{
+                          display:"flex", alignItems:"center", gap:12,
+                          padding:"9px 12px", borderRadius:10, cursor:"pointer"
+                        }}>
+                          <div style={{ width:34, height:34, borderRadius:8, background:"#1f2937", display:"flex", alignItems:"center", justifyContent:"center", fontSize:14, flexShrink:0 }}>📦</div>
+                          <div style={{ flex:1, minWidth:0 }}>
+                            <div style={{ fontSize:13, fontWeight:500, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{e.cliente}</div>
+                            <div style={{ fontSize:11, color:"#6b7280" }}>{e.courier} · {e.ciudad}</div>
+                          </div>
+                          <div>
+                            <div className="pill" style={{ background:st.bg, color:st.color, border:`1px solid ${st.color}44` }}>{st.label}</div>
+                            <div style={{ fontSize:11, color:"#6b7280", marginTop:3, textAlign:"right" }}>{e.eta}</div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ══════ STOCK ══════ */}
+          {activeTab === "stock" && (
+            <div style={{ display:"flex", flexDirection:"column", gap:20 }}>
+              <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:16 }}>
+                {[
+                  { label:"Total alertas stock",  value: data?.stock?.alertas||0, icon:"⚠️", color:"#f59e0b" },
+                  { label:"Sin stock",             value: (data?.stock?.productos||[]).filter(p=>p.stock===0).length, icon:"🚫", color:"#ef4444" },
+                  { label:"Stock crítico (≤5)",    value: (data?.stock?.productos||[]).filter(p=>p.stock>0&&p.stock<=5).length, icon:"📦", color:"#3b82f6" },
+                ].map((k,i) => (
+                  <div key={i} className="stat-card" style={{ display:"flex", alignItems:"center", gap:16 }}>
+                    <div style={{ fontSize:28 }}>{k.icon}</div>
+                    <div>
+                      <div style={{ fontSize:11, color:"#6b7280" }}>{k.label}</div>
+                      <div style={{ fontSize:28, fontWeight:700, color:k.color }}>{k.value}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="card" style={{ padding:22 }}>
+                <div style={{ fontWeight:600, fontSize:14, marginBottom:16 }}>⚠️ Productos que necesitan reposición</div>
+                <div style={{ display:"grid", gridTemplateColumns:"2fr 1fr 1fr 1fr", padding:"6px 12px", fontSize:11, color:"#6b7280", fontWeight:600, textTransform:"uppercase", letterSpacing:"0.6px", marginBottom:4 }}>
+                  <span>Producto</span><span>SKU</span><span>Stock</span><span>Canales</span>
+                </div>
+                {(data?.stock?.productos || []).length === 0 && (
+                  <div style={{ color:"#22c55e", padding:"20px 12px", fontSize:13 }}>✓ Todos los productos tienen stock suficiente</div>
+                )}
+                {(data?.stock?.productos || []).map((p, i) => (
+                  <div key={i} className="row-item" style={{
+                    display:"grid", gridTemplateColumns:"2fr 1fr 1fr 1fr",
+                    padding:"12px 12px", borderRadius:10, alignItems:"center",
+                    borderBottom: i < (data.stock.productos.length-1) ? "1px solid #1f2937" : "none"
+                  }}>
+                    <span style={{ fontSize:13, fontWeight:500 }}>{p.nombre}</span>
+                    <span style={{ fontSize:12, color:"#6b7280", fontFamily:"DM Mono,monospace" }}>{p.sku||"—"}</span>
+                    <div>
+                      <span style={{ fontWeight:700, fontSize:18, color: p.stock===0 ? "#ef4444" : p.stock<=5 ? "#f59e0b" : "#22c55e" }}>{p.stock}</span>
+                      <span style={{ fontSize:11, color:"#6b7280" }}> / min {p.minimo}</span>
+                    </div>
+                    <div style={{ display:"flex", gap:4 }}>
+                      {(p.canales||[]).map(c => (
+                        <span key={c} style={{ fontSize:10, fontWeight:700, padding:"2px 6px", borderRadius:5, background:"#1f2937", color:"#9ca3af" }}>{canalIcons[c]||c}</span>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* ══════ ENVÍOS ══════ */}
+          {activeTab === "envios" && (
+            <div style={{ display:"flex", flexDirection:"column", gap:20 }}>
+              <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:16 }}>
+                {[
+                  { label:"Pendientes",      value:data?.pedidos?.pendientes||0, color:"#f59e0b" },
+                  { label:"En camino",       value:data?.pedidos?.enCamino||0,   color:"#3b82f6" },
+                  { label:"Entregados (mes)",value:data?.pedidos?.entregados||0, color:"#22c55e" },
+                  { label:"Cancelados",      value:data?.pedidos?.cancelados||0, color:"#ef4444" },
+                ].map((k,i) => (
+                  <div key={i} className="stat-card">
+                    <div style={{ fontSize:11, color:"#6b7280", marginBottom:6 }}>{k.label}</div>
+                    <div style={{ fontSize:30, fontWeight:700, color:k.color }}>{k.value}</div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="card" style={{ padding:22 }}>
+                <div style={{ fontWeight:600, fontSize:14, marginBottom:16 }}>Todos los envíos recientes</div>
+                <div style={{ display:"grid", gridTemplateColumns:"1fr 1.5fr 1fr 1fr 1fr", padding:"6px 16px", fontSize:11, color:"#6b7280", fontWeight:600, textTransform:"uppercase", letterSpacing:"0.6px", marginBottom:4 }}>
+                  <span>ID</span><span>Cliente / Producto</span><span>Courier</span><span>Destino</span><span>Estado</span>
+                </div>
+                {(data?.envios || []).map((e, i) => {
+                  const st = estadoConfig[e.estado] || estadoConfig.pendiente;
+                  return (
+                    <div key={i} className="row-item" style={{
+                      display:"grid", gridTemplateColumns:"1fr 1.5fr 1fr 1fr 1fr",
+                      padding:"13px 16px", borderRadius:10, alignItems:"center",
+                      borderBottom: i < (data.envios.length-1) ? "1px solid #1f2937" : "none", cursor:"pointer"
+                    }}>
+                      <span style={{ fontSize:11, fontFamily:"DM Mono,monospace", color:"#6b7280" }}>{e.id}</span>
+                      <div>
+                        <div style={{ fontSize:13, fontWeight:500 }}>{e.cliente}</div>
+                        <div style={{ fontSize:11, color:"#6b7280" }}>{e.producto}</div>
+                      </div>
+                      <span style={{ fontSize:13 }}>{e.courier}</span>
+                      <span style={{ fontSize:13, color:"#9ca3af" }}>{e.ciudad}</span>
+                      <div className="pill" style={{ background:st.bg, color:st.color, border:`1px solid ${st.color}33` }}>{st.label}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* ══════ ARCA / IMPOSITIVO ══════ */}
+          {activeTab === "impositivo" && (
+            <div style={{ display:"flex", flexDirection:"column", gap:20 }}>
+              <div style={{
+                background:"linear-gradient(135deg,#1e3a5f,#0d2137)",
+                border:"1px solid #2d4a6a", borderRadius:16, padding:20,
+                display:"flex", alignItems:"center", gap:16
+              }}>
+                <div style={{ fontSize:32 }}>📋</div>
+                <div>
+                  <div style={{ fontWeight:700, fontSize:16 }}>Módulo ARCA (ex AFIP)</div>
+                  <div style={{ fontSize:13, color:"#93c5fd", marginTop:4 }}>Próximamente: integración automática con AFIP/ARCA</div>
+                </div>
+              </div>
+              <div className="card" style={{ padding:40, textAlign:"center" }}>
+                <div style={{ fontSize:40, marginBottom:16 }}>🔧</div>
+                <div style={{ fontSize:16, fontWeight:600, marginBottom:8 }}>En desarrollo</div>
+                <div style={{ fontSize:13, color:"#6b7280" }}>
+                  Este módulo conectará con ARCA para traer IVA, Ingresos Brutos y vencimientos automáticamente.
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ══════ CLIENTES ══════ */}
+          {activeTab === "clientes" && (
+            <div style={{ display:"flex", flexDirection:"column", gap:20 }}>
+              <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:16 }}>
+                {[
+                  { label:"Clientes únicos (mes)", value: data?.clientes?.total||0, color:"#3b82f6" },
+                  { label:"Nuevos esta semana",    value: `+${data?.clientes?.nuevos||0}`, color:"#22c55e" },
+                  { label:"Total pedidos mes",     value: (data?.canales||[]).reduce((a,c)=>a+c.pedidos,0), color:"#a855f7" },
+                ].map((k,i) => (
+                  <div key={i} className="stat-card">
+                    <div style={{ fontSize:11, color:"#6b7280", marginBottom:8 }}>{k.label}</div>
+                    <div style={{ fontSize:28, fontWeight:700, color:k.color }}>{k.value}</div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="card" style={{ padding:40, textAlign:"center" }}>
+                <div style={{ fontSize:40, marginBottom:16 }}>👥</div>
+                <div style={{ fontSize:16, fontWeight:600, marginBottom:8 }}>Historial de clientes</div>
+                <div style={{ fontSize:13, color:"#6b7280" }}>
+                  Próximamente: ranking de mejores clientes, frecuencia de compra y segmentación.
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ══════ GASTOS ══════ */}
+          {activeTab === "gastos" && (
+            <div style={{ display:"flex", flexDirection:"column", gap:20 }}>
+
+              {/* KPIs */}
+              <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:16 }}>
+                {[
+                  { label:"Total gastos del mes", value: formatARS(totalGastos), color:"#ef4444" },
+                  { label:"Resultado neto",        value: formatARS((data?.ventas?.mes||0) - totalGastos), color: (data?.ventas?.mes||0) - totalGastos >= 0 ? "#22c55e" : "#ef4444" },
+                  { label:"Rubros activos",        value: gastosPorRubro.length, color:"#f59e0b" },
+                ].map((k,i) => (
+                  <div key={i} className="stat-card">
+                    <div style={{ fontSize:11, color:"#6b7280", marginBottom:8 }}>{k.label}</div>
+                    <div style={{ fontSize:24, fontWeight:700, color:k.color }}>{k.value}</div>
+                  </div>
+                ))}
+              </div>
+
+              <div style={{ display:"grid", gridTemplateColumns:"1fr 1.4fr", gap:16 }}>
+
+                {/* Formulario */}
+                <div className="card" style={{ padding:22 }}>
+                  <div style={{ fontWeight:600, fontSize:14, marginBottom:16 }}>➕ Cargar gasto</div>
+                  <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+                    <div>
+                      <div style={{ fontSize:11, color:"#6b7280", marginBottom:4 }}>Rubro</div>
+                      <select
+                        value={gastoForm.rubro}
+                        onChange={e => setGastoForm(f => ({...f, rubro: e.target.value}))}
+                        style={{ width:"100%", background:"#1f2937", border:"1px solid #374151", color:"#e2e8f0", padding:"8px 10px", borderRadius:8, fontSize:13 }}
+                      >
+                        {RUBROS.map(r => <option key={r} value={r}>{r}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <div style={{ fontSize:11, color:"#6b7280", marginBottom:4 }}>Monto ($)</div>
+                      <input
+                        type="number" placeholder="0"
+                        value={gastoForm.monto}
+                        onChange={e => setGastoForm(f => ({...f, monto: e.target.value}))}
+                        style={{ width:"100%", background:"#1f2937", border:"1px solid #374151", color:"#e2e8f0", padding:"8px 10px", borderRadius:8, fontSize:13 }}
+                      />
+                    </div>
+                    <div>
+                      <div style={{ fontSize:11, color:"#6b7280", marginBottom:4 }}>Descripción</div>
+                      <input
+                        type="text" placeholder="Ej: OCA noviembre"
+                        value={gastoForm.descripcion}
+                        onChange={e => setGastoForm(f => ({...f, descripcion: e.target.value}))}
+                        style={{ width:"100%", background:"#1f2937", border:"1px solid #374151", color:"#e2e8f0", padding:"8px 10px", borderRadius:8, fontSize:13 }}
+                      />
+                    </div>
+                    <div>
+                      <div style={{ fontSize:11, color:"#6b7280", marginBottom:4 }}>Fecha</div>
+                      <input
+                        type="date"
+                        value={gastoForm.fecha}
+                        onChange={e => setGastoForm(f => ({...f, fecha: e.target.value}))}
+                        style={{ width:"100%", background:"#1f2937", border:"1px solid #374151", color:"#e2e8f0", padding:"8px 10px", borderRadius:8, fontSize:13 }}
+                      />
+                    </div>
+                    <button onClick={agregarGasto} style={{
+                      marginTop:4, background:"linear-gradient(135deg,#3b82f6,#8b5cf6)",
+                      border:"none", color:"white", padding:"10px", borderRadius:10,
+                      cursor:"pointer", fontWeight:600, fontSize:13
+                    }}>Agregar gasto</button>
+                  </div>
+                </div>
+
+                {/* Breakdown por rubro */}
+                <div className="card" style={{ padding:22 }}>
+                  <div style={{ fontWeight:600, fontSize:14, marginBottom:16 }}>Gastos por rubro</div>
+                  {gastosPorRubro.length === 0 && (
+                    <div style={{ color:"#4b5563", fontSize:13, padding:"20px 0" }}>Todavía no cargaste gastos este mes.</div>
+                  )}
+                  {gastosPorRubro.map((r,i) => {
+                    const pct = Math.round((r.total / totalGastos) * 100);
+                    return (
+                      <div key={i} style={{ marginBottom:14 }}>
+                        <div style={{ display:"flex", justifyContent:"space-between", marginBottom:5 }}>
+                          <span style={{ fontSize:13, fontWeight:500 }}>{r.rubro}</span>
+                          <span style={{ fontSize:13, fontWeight:600, color:"#ef4444" }}>{formatARS(r.total)}</span>
+                        </div>
+                        <div style={{ background:"#1f2937", borderRadius:4, height:5 }}>
+                          <div style={{ width:`${pct}%`, height:"100%", background:"linear-gradient(90deg,#ef4444,#f59e0b)", borderRadius:4 }}></div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Listado de gastos */}
+              {gastos.length > 0 && (
+                <div className="card" style={{ padding:22 }}>
+                  <div style={{ fontWeight:600, fontSize:14, marginBottom:14 }}>Últimos gastos cargados</div>
+                  <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr 80px", padding:"6px 12px", fontSize:11, color:"#6b7280", fontWeight:600, textTransform:"uppercase", letterSpacing:"0.6px", marginBottom:4 }}>
+                    <span>Rubro</span><span>Descripción</span><span>Fecha</span><span style={{textAlign:"right"}}>Monto</span>
+                  </div>
+                  {gastos.slice(0,10).map((g,i) => (
+                    <div key={g.id} className="row-item" style={{
+                      display:"grid", gridTemplateColumns:"1fr 1fr 1fr 80px",
+                      padding:"10px 12px", borderRadius:10, alignItems:"center",
+                      borderBottom: i < Math.min(gastos.length,10)-1 ? "1px solid #1f2937" : "none"
+                    }}>
+                      <span style={{ fontSize:13 }}>{g.rubro}</span>
+                      <span style={{ fontSize:12, color:"#9ca3af" }}>{g.descripcion||"—"}</span>
+                      <span style={{ fontSize:12, color:"#6b7280" }}>{g.fecha}</span>
+                      <div style={{ display:"flex", alignItems:"center", gap:8, justifyContent:"flex-end" }}>
+                        <span style={{ fontSize:13, fontWeight:600, color:"#ef4444" }}>{formatARS(g.monto)}</span>
+                        <button onClick={() => eliminarGasto(g.id)} style={{ background:"none", border:"none", color:"#4b5563", cursor:"pointer", fontSize:14, padding:0 }}>✕</button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ══════ PUBLICIDAD ══════ */}
+          {activeTab === "publicidad" && (
+            <div style={{ display:"flex", flexDirection:"column", gap:20 }}>
+
+              {/* Banner Meta Ads */}
+              <div style={{
+                background:"linear-gradient(135deg,#1a1f3a,#0f1225)",
+                border:"1px solid #2d3561", borderRadius:16, padding:20,
+                display:"flex", alignItems:"center", gap:16
+              }}>
+                <div style={{ fontSize:32 }}>📣</div>
+                <div style={{ flex:1 }}>
+                  <div style={{ fontWeight:700, fontSize:16 }}>Meta Ads — datos de ejemplo</div>
+                  <div style={{ fontSize:13, color:"#818cf8", marginTop:4 }}>
+                    Cuando tengas tu cuenta publicitaria, conectamos Meta Ads API en minutos.
+                  </div>
+                </div>
+                <div style={{ background:"#1f2937", border:"1px solid #374151", color:"#6b7280", padding:"6px 16px", borderRadius:20, fontSize:12 }}>
+                  ⏳ Pendiente de conectar
+                </div>
+              </div>
+
+              {/* KPIs publicidad */}
+              <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:16 }}>
+                {[
+                  { label:"Gasto total mes",       value:"$11.430",  sub:"2 campañas activas", color:"#ef4444",  icon:"💸" },
+                  { label:"ROAS promedio",          value:"4.2x",     sub:"Retorno por peso invertido", color:"#22c55e", icon:"📈" },
+                  { label:"Costo por conversión",   value:"$367",     sub:"64 compras generadas", color:"#f59e0b", icon:"🎯" },
+                  { label:"CTR promedio",           value:"2.4%",     sub:"Tasa de clic en anuncios", color:"#3b82f6", icon:"👆" },
+                ].map((k,i) => (
+                  <div key={i} className="stat-card">
+                    <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
+                      <div>
+                        <div style={{ fontSize:11, color:"#6b7280", marginBottom:8, fontWeight:500 }}>{k.label}</div>
+                        <div style={{ fontSize:24, fontWeight:700, color:k.color }}>{k.value}</div>
+                        <div style={{ fontSize:11, color:"#4b5563", marginTop:6 }}>{k.sub}</div>
+                      </div>
+                      <div style={{ fontSize:20 }}>{k.icon}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:16 }}>
+
+                {/* Funnel de conversión */}
+                <div className="card" style={{ padding:22 }}>
+                  <div style={{ fontWeight:600, fontSize:14, marginBottom:6 }}>🔽 Funnel de conversión</div>
+                  <div style={{ fontSize:12, color:"#6b7280", marginBottom:18 }}>
+                    De alcance a compra — cada paso muestra cuántos avanzan
+                  </div>
+                  <Funnel steps={funnelSteps} />
+                  <div style={{ marginTop:16, padding:"10px 14px", background:"#14532d88", border:"1px solid #22c55e33", borderRadius:10 }}>
+                    <span style={{ fontSize:12, color:"#22c55e" }}>
+                      Tasa de conversión final: <strong>{((funnelSteps[5].valor / funnelSteps[0].valor) * 100).toFixed(2)}%</strong> — de alcance a compra
+                    </span>
+                  </div>
+                </div>
+
+                {/* Campañas activas */}
+                <div className="card" style={{ padding:22 }}>
+                  <div style={{ fontWeight:600, fontSize:14, marginBottom:16 }}>Campañas activas</div>
+                  {campañasMock.map((c,i) => (
+                    <div key={i} style={{
+                      padding:"14px 0",
+                      borderBottom: i < campañasMock.length-1 ? "1px solid #1f2937" : "none"
+                    }}>
+                      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:8 }}>
+                        <div style={{ flex:1, minWidth:0 }}>
+                          <div style={{ fontSize:13, fontWeight:500, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{c.nombre}</div>
+                          <div style={{ display:"flex", gap:6, marginTop:5 }}>
+                            <span className="pill" style={{
+                              background: c.estado==="activa" ? "#14532d" : "#451a03",
+                              color: c.estado==="activa" ? "#22c55e" : "#f59e0b",
+                              border:`1px solid ${c.estado==="activa" ? "#22c55e33" : "#f59e0b33"}`
+                            }}>{c.estado}</span>
+                            <span style={{ fontSize:11, color:"#6b7280" }}>ROAS: <strong style={{color:"#22c55e"}}>{c.roas}x</strong></span>
+                            <span style={{ fontSize:11, color:"#6b7280" }}>CTR: {c.ctr}</span>
+                          </div>
+                        </div>
+                        <div style={{ textAlign:"right", flexShrink:0 }}>
+                          <div style={{ fontSize:13, fontWeight:600 }}>{formatARS(c.gastado)}</div>
+                          <div style={{ fontSize:11, color:"#4b5563" }}>de {formatARS(c.presupuesto)}</div>
+                        </div>
+                      </div>
+                      {/* barra de presupuesto */}
+                      <div style={{ background:"#1f2937", borderRadius:4, height:4 }}>
+                        <div style={{
+                          width:`${Math.round((c.gastado/c.presupuesto)*100)}%`,
+                          height:"100%",
+                          background: c.gastado >= c.presupuesto ? "#ef4444" : "linear-gradient(90deg,#3b82f6,#8b5cf6)",
+                          borderRadius:4
+                        }}></div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Tabla detalle campañas */}
+              <div className="card" style={{ padding:22 }}>
+                <div style={{ fontWeight:600, fontSize:14, marginBottom:14 }}>Detalle por campaña</div>
+                <div style={{ display:"grid", gridTemplateColumns:"2fr 1fr 1fr 1fr 1fr 1fr", padding:"6px 12px", fontSize:11, color:"#6b7280", fontWeight:600, textTransform:"uppercase", letterSpacing:"0.6px", marginBottom:4 }}>
+                  <span>Campaña</span><span>Gastado</span><span>ROAS</span><span>CPC</span><span>CTR</span><span>Compras</span>
+                </div>
+                {campañasMock.map((c,i) => (
+                  <div key={i} className="row-item" style={{
+                    display:"grid", gridTemplateColumns:"2fr 1fr 1fr 1fr 1fr 1fr",
+                    padding:"12px 12px", borderRadius:10, alignItems:"center",
+                    borderBottom: i < campañasMock.length-1 ? "1px solid #1f2937" : "none"
+                  }}>
+                    <span style={{ fontSize:13, fontWeight:500 }}>{c.nombre}</span>
+                    <span style={{ fontSize:13, color:"#ef4444", fontWeight:600 }}>{formatARS(c.gastado)}</span>
+                    <span style={{ fontSize:13, color:"#22c55e", fontWeight:700 }}>{c.roas}x</span>
+                    <span style={{ fontSize:13 }}>{formatARS(c.cpc)}</span>
+                    <span style={{ fontSize:13 }}>{c.ctr}</span>
+                    <span style={{ fontSize:13, fontWeight:600 }}>{c.conversiones}</span>
+                  </div>
+                ))}
+              </div>
+
+            </div>
+          )}
+
+          {/* ══════ RENTABILIDAD ══════ */}
+          {activeTab === "rentabilidad" && (
+            <div style={{ display:"flex", flexDirection:"column", gap:20 }}>
+
+              {/* P&L Waterfall */}
+              <div style={{ display:"grid", gridTemplateColumns:"1.4fr 1fr", gap:16 }}>
+                <div className="card" style={{ padding:24 }}>
+                  <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:20 }}>
+                    <div>
+                      <div className="section-title">Estado de resultados</div>
+                      <div className="section-sub">Mes actual — datos automáticos + config</div>
+                    </div>
+                    <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                      <span style={{ fontSize:12, color:"#6b7280" }}>Costo merch:</span>
+                      <input
+                        type="number" min="0" max="100"
+                        value={rentConfig.costoPct}
+                        onChange={e => {
+                          const v = { ...rentConfig, costoPct: parseFloat(e.target.value||0) };
+                          setRentConfig(v);
+                          localStorage.setItem("mokin_rent", JSON.stringify(v));
+                        }}
+                        style={{ width:56, background:"#1f2937", border:"1px solid #374151", color:"#e2e8f0", padding:"4px 8px", borderRadius:6, fontSize:13, textAlign:"center" }}
+                      />
+                      <span style={{ fontSize:12, color:"#6b7280" }}>%</span>
+                    </div>
+                  </div>
+
+                  {/* Waterfall rows */}
+                  {[
+                    { label:"Ingresos brutos",      valor: ingresos,   color:"#22c55e", bg:"#14532d", signo:"",  bold:true  },
+                    { label:`Costo mercadería (${rentConfig.costoPct}%)`, valor:-costoMerch,  color:"#ef4444", bg:"#450a0a", signo:"−", bold:false },
+                    { label:"Utilidad bruta",        valor: utilBruta,  color: utilBruta>=0?"#60a5fa":"#ef4444", bg:"#1e3a5f", signo:"=", bold:true  },
+                    { label:"Gastos de estructura",  valor:-estructura, color:"#f59e0b", bg:"#451a03", signo:"−", bold:false },
+                    { label:"Utilidad neta",         valor: utilNeta,   color: utilNeta>=0?"#a78bfa":"#ef4444",  bg:"#2e1065", signo:"=", bold:true  },
+                  ].map((row, i) => {
+                    const barPct = ingresos > 0 ? Math.min(Math.abs(row.valor)/ingresos*100, 100) : 0;
+                    return (
+                      <div key={i} style={{
+                        padding:"12px 14px", borderRadius:10, marginBottom:6,
+                        background: row.bg+"55", border:`1px solid ${row.color}22`,
+                        display:"flex", alignItems:"center", gap:12
+                      }}>
+                        <span style={{ fontSize:13, color:row.color, fontWeight:700, width:14, flexShrink:0 }}>{row.signo}</span>
+                        <span style={{ flex:1, fontSize:13, fontWeight: row.bold ? 600 : 400, color: row.bold ? "#e2e8f0" : "#9ca3af" }}>{row.label}</span>
+                        <div style={{ width:100, background:"#0a0d14", borderRadius:4, height:4, flexShrink:0 }}>
+                          <div style={{ width:`${barPct}%`, height:"100%", background:row.color, borderRadius:4 }}></div>
+                        </div>
+                        <span style={{ fontSize:14, fontWeight: row.bold?700:500, color:row.color, textAlign:"right", minWidth:110, fontVariantNumeric:"tabular-nums" }}>
+                          {formatARS(Math.abs(row.valor))}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* KPIs rentabilidad + Caja */}
+                <div style={{ display:"flex", flexDirection:"column", gap:14 }}>
+                  {[
+                    { label:"Margen bruto",  value:`${margenBruto.toFixed(1)}%`, color: margenBruto>30?"#22c55e":"#f59e0b", accent:"green"  },
+                    { label:"Margen neto",   value:`${margenNeto.toFixed(1)}%`,  color: margenNeto>10?"#a78bfa":"#ef4444",  accent:"purple" },
+                    { label:"Caja estimada", value: formatARS(cajaEstimada),     color:"#60a5fa", accent:"blue"   },
+                  ].map((k,i) => (
+                    <div key={i} className={`kpi-card ${k.accent}`} style={{ paddingLeft:24 }}>
+                      <div className="metric-label" style={{ marginBottom:8 }}>{k.label}</div>
+                      <div className="metric-value" style={{ fontSize:32, color:k.color }}>{k.value}</div>
+                    </div>
+                  ))}
+
+                  {/* Conciliación simple */}
+                  <div className="card" style={{ padding:16 }}>
+                    <div style={{ fontSize:12, fontWeight:600, marginBottom:10, color:"#9ca3af" }}>📊 Conciliación rápida</div>
+                    {[
+                      { label:"Ingresos esperados (ventas pagadas)", valor: ingresos,    color:"#22c55e" },
+                      { label:"Gastos declarados",                   valor: estructura,  color:"#ef4444" },
+                      { label:"Diferencia (caja teórica)",           valor: cajaEstimada,color: cajaEstimada>=0?"#60a5fa":"#ef4444" },
+                    ].map((r,i)=>(
+                      <div key={i} style={{ display:"flex", justifyContent:"space-between", padding:"6px 0", borderBottom: i<2?"1px solid #1f293722":"none" }}>
+                        <span style={{ fontSize:11, color:"#6b7280" }}>{r.label}</span>
+                        <span style={{ fontSize:12, fontWeight:600, color:r.color }}>{formatARS(r.valor)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* USD */}
+              <div style={{ display:"grid", gridTemplateColumns:"1fr 1.5fr", gap:16 }}>
+                <div className="card" style={{ padding:22 }}>
+                  <div className="section-title" style={{ marginBottom:4 }}>💵 Compras en USD</div>
+                  <div className="section-sub" style={{ marginBottom:16 }}>Registrá tus compras de dólares para ver tu TC promedio</div>
+                  <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+                    <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
+                      <div>
+                        <div style={{ fontSize:11, color:"#6b7280", marginBottom:3 }}>USD comprados</div>
+                        <input type="number" placeholder="500" value={usdForm.usd}
+                          onChange={e=>setUsdForm(f=>({...f,usd:e.target.value}))}
+                          style={{ width:"100%", background:"#1f2937", border:"1px solid #374151", color:"#e2e8f0", padding:"7px 10px", borderRadius:8, fontSize:13 }}/>
+                      </div>
+                      <div>
+                        <div style={{ fontSize:11, color:"#6b7280", marginBottom:3 }}>TC de compra</div>
+                        <input type="number" placeholder="1250" value={usdForm.tc}
+                          onChange={e=>setUsdForm(f=>({...f,tc:e.target.value}))}
+                          style={{ width:"100%", background:"#1f2937", border:"1px solid #374151", color:"#e2e8f0", padding:"7px 10px", borderRadius:8, fontSize:13 }}/>
+                      </div>
+                    </div>
+                    <input type="text" placeholder="Descripción (opcional)"
+                      value={usdForm.descripcion}
+                      onChange={e=>setUsdForm(f=>({...f,descripcion:e.target.value}))}
+                      style={{ background:"#1f2937", border:"1px solid #374151", color:"#e2e8f0", padding:"7px 10px", borderRadius:8, fontSize:13 }}/>
+                    <input type="date" value={usdForm.fecha}
+                      onChange={e=>setUsdForm(f=>({...f,fecha:e.target.value}))}
+                      style={{ background:"#1f2937", border:"1px solid #374151", color:"#e2e8f0", padding:"7px 10px", borderRadius:8, fontSize:13 }}/>
+                    <button onClick={agregarUSD} style={{
+                      background:"linear-gradient(135deg,#22c55e,#16a34a)", border:"none",
+                      color:"white", padding:"9px", borderRadius:10, cursor:"pointer", fontWeight:600, fontSize:13
+                    }}>Registrar compra USD</button>
+                  </div>
+                </div>
+
+                <div className="card" style={{ padding:22 }}>
+                  <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:10, marginBottom:18 }}>
+                    {[
+                      { label:"Total USD en caja", value:`U$D ${totalUSD.toLocaleString("es-AR")}`, color:"#22c55e" },
+                      { label:"TC promedio compra", value: tcPromedio>0 ? `$${Math.round(tcPromedio).toLocaleString("es-AR")}` : "—", color:"#f59e0b" },
+                      { label:"Pesos invertidos",  value: formatARS(totalPesosUSD), color:"#60a5fa" },
+                    ].map((k,i)=>(
+                      <div key={i} style={{ background:"#0d1117", border:"1px solid #1f2937", borderRadius:10, padding:12 }}>
+                        <div style={{ fontSize:10, color:"#6b7280", marginBottom:4, textTransform:"uppercase", letterSpacing:"0.4px" }}>{k.label}</div>
+                        <div style={{ fontSize:16, fontWeight:700, color:k.color }}>{k.value}</div>
+                      </div>
+                    ))}
+                  </div>
+                  {comprasUSD.length === 0 && (
+                    <div style={{ color:"#4b5563", fontSize:13, padding:"10px 0" }}>Todavía no registraste compras de USD.</div>
+                  )}
+                  {comprasUSD.map((c,i)=>(
+                    <div key={c.id} className="row-item" style={{
+                      display:"grid", gridTemplateColumns:"1fr 1fr 1fr 1fr 28px",
+                      padding:"9px 10px", alignItems:"center",
+                      borderBottom: i<comprasUSD.length-1?"1px solid #1f2937":"none"
+                    }}>
+                      <span style={{ fontSize:11, color:"#6b7280" }}>{c.fecha}</span>
+                      <span style={{ fontSize:13, fontWeight:600, color:"#22c55e" }}>U$D {parseFloat(c.usd).toLocaleString()}</span>
+                      <span style={{ fontSize:12, color:"#f59e0b" }}>TC ${parseFloat(c.tc).toLocaleString()}</span>
+                      <span style={{ fontSize:11, color:"#9ca3af" }}>{c.descripcion||"—"}</span>
+                      <button onClick={()=>eliminarUSD(c.id)} style={{ background:"none", border:"none", color:"#4b5563", cursor:"pointer", fontSize:14 }}>✕</button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ══════ PROVEEDORES ══════ */}
+          {activeTab === "proveedores" && (
+            <div style={{ display:"flex", flexDirection:"column", gap:20 }}>
+
+              {/* KPIs */}
+              <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:14 }}>
+                {[
+                  { label:"Total proveedores", value: proveedores.length, color:"#60a5fa", accent:"blue"   },
+                  { label:"Deuda total",        value: formatARS(totalDeuda), color:"#ef4444", accent:"red"    },
+                  { label:"Con novedades",      value: proveedores.filter(p=>p.novedades?.length>0).length, color:"#f59e0b", accent:"amber"  },
+                ].map((k,i)=>(
+                  <div key={i} className={`kpi-card ${k.accent}`} style={{ paddingLeft:24 }}>
+                    <div className="metric-label" style={{ marginBottom:8 }}>{k.label}</div>
+                    <div className="metric-value" style={{ color:k.color }}>{k.value}</div>
+                  </div>
+                ))}
+              </div>
+
+              <div style={{ display:"grid", gridTemplateColumns:"1fr 1.6fr", gap:16 }}>
+
+                {/* Formulario nuevo proveedor */}
+                <div className="card" style={{ padding:22 }}>
+                  <div className="section-title" style={{ marginBottom:16 }}>➕ Nuevo proveedor</div>
+                  <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+                    {[
+                      { label:"Nombre", key:"nombre", placeholder:"Ej: Distribuidora Textil SA" },
+                      { label:"Contacto (tel/email)", key:"contacto", placeholder:"Ej: 11-4444-5555" },
+                      { label:"Rubro / categoría", key:"rubro", placeholder:"Ej: Indumentaria, Calzado" },
+                    ].map(f=>(
+                      <div key={f.key}>
+                        <div style={{ fontSize:11, color:"#6b7280", marginBottom:3 }}>{f.label}</div>
+                        <input type="text" placeholder={f.placeholder} value={provForm[f.key]}
+                          onChange={e=>setProvForm(p=>({...p,[f.key]:e.target.value}))}
+                          style={{ width:"100%", background:"#1f2937", border:"1px solid #374151", color:"#e2e8f0", padding:"7px 10px", borderRadius:8, fontSize:13 }}/>
+                      </div>
+                    ))}
+                    <div>
+                      <div style={{ fontSize:11, color:"#6b7280", marginBottom:3 }}>Saldo que le debés ($)</div>
+                      <input type="number" placeholder="0" value={provForm.saldo}
+                        onChange={e=>setProvForm(p=>({...p,saldo:e.target.value}))}
+                        style={{ width:"100%", background:"#1f2937", border:"1px solid #374151", color:"#e2e8f0", padding:"7px 10px", borderRadius:8, fontSize:13 }}/>
+                    </div>
+                    <button onClick={agregarProveedor} style={{
+                      background:"linear-gradient(135deg,#3b82f6,#8b5cf6)", border:"none",
+                      color:"white", padding:"9px", borderRadius:10, cursor:"pointer", fontWeight:600, fontSize:13
+                    }}>Agregar proveedor</button>
+                  </div>
+                </div>
+
+                {/* Novedades recientes */}
+                <div className="card" style={{ padding:22 }}>
+                  <div className="section-title" style={{ marginBottom:14 }}>🔔 Novedades recientes</div>
+                  {novedadesRecientes.length === 0 && (
+                    <div style={{ color:"#4b5563", fontSize:13 }}>Sin novedades registradas todavía.</div>
+                  )}
+                  {novedadesRecientes.map((n,i)=>{
+                    const tipoConfig = {
+                      info:     { color:"#60a5fa", icon:"ℹ️" },
+                      alerta:   { color:"#f59e0b", icon:"⚠️" },
+                      sinstock: { color:"#ef4444", icon:"🚫" },
+                      cambio:   { color:"#a78bfa", icon:"🔄" },
+                    };
+                    const tc = tipoConfig[n.tipo] || tipoConfig.info;
+                    return (
+                      <div key={i} style={{
+                        padding:"10px 14px", borderRadius:10, marginBottom:8,
+                        background:"#0d111788", border:`1px solid ${tc.color}22`,
+                        display:"flex", gap:10, alignItems:"flex-start"
+                      }}>
+                        <span style={{ fontSize:16, flexShrink:0 }}>{tc.icon}</span>
+                        <div>
+                          <div style={{ fontSize:11, color:tc.color, fontWeight:600, marginBottom:2 }}>{n.proveedor}</div>
+                          <div style={{ fontSize:13, color:"#e2e8f0" }}>{n.texto}</div>
+                          <div style={{ fontSize:10, color:"#4b5563", marginTop:3 }}>{n.fecha}</div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Lista de proveedores */}
+              {proveedores.length === 0 && (
+                <div className="card" style={{ padding:40, textAlign:"center" }}>
+                  <div style={{ fontSize:40, marginBottom:12 }}>🤝</div>
+                  <div style={{ fontSize:15, fontWeight:600, marginBottom:6 }}>Todavía no cargaste proveedores</div>
+                  <div style={{ fontSize:13, color:"#6b7280" }}>Usá el formulario de arriba para agregar tu primer proveedor.</div>
+                </div>
+              )}
+
+              {proveedores.map(p=>(
+                <div key={p.id} className="card" style={{ padding:0, overflow:"hidden" }}>
+                  {/* Header del proveedor */}
+                  <div style={{ padding:"16px 20px", display:"flex", alignItems:"center", gap:14, cursor:"pointer" }}
+                    onClick={()=>setProvExpandido(provExpandido===p.id ? null : p.id)}>
+                    <div style={{
+                      width:42, height:42, borderRadius:10, flexShrink:0,
+                      background:"linear-gradient(135deg,#1e3a5f,#2d4a6a)",
+                      display:"flex", alignItems:"center", justifyContent:"center",
+                      fontSize:18, fontWeight:700, color:"#60a5fa"
+                    }}>{p.nombre[0]}</div>
+                    <div style={{ flex:1 }}>
+                      <div style={{ fontSize:14, fontWeight:600 }}>{p.nombre}</div>
+                      <div style={{ fontSize:12, color:"#6b7280", marginTop:2 }}>
+                        {p.rubro && <span style={{ marginRight:10 }}>🏷 {p.rubro}</span>}
+                        {p.contacto && <span>📞 {p.contacto}</span>}
+                      </div>
+                    </div>
+                    <div style={{ textAlign:"right", marginRight:12 }}>
+                      <div style={{ fontSize:11, color:"#6b7280" }}>Saldo adeudado</div>
+                      <div style={{ fontSize:16, fontWeight:700, color: p.saldo>0?"#ef4444":"#22c55e" }}>
+                        {p.saldo>0 ? formatARS(p.saldo) : "Sin deuda"}
+                      </div>
+                    </div>
+                    <div style={{ display:"flex", gap:6, alignItems:"center" }}>
+                      {(p.novedades?.length||0)>0 && (
+                        <span className="badge" style={{ position:"static", width:"auto", borderRadius:20, padding:"0 8px", fontSize:10 }}>
+                          {p.novedades.length} novedad{p.novedades.length!==1?"es":""}
+                        </span>
+                      )}
+                      <span style={{ color:"#4b5563", fontSize:18 }}>{provExpandido===p.id?"▲":"▼"}</span>
+                    </div>
+                  </div>
+
+                  {/* Panel expandido */}
+                  {provExpandido===p.id && (
+                    <div style={{ borderTop:"1px solid #1f2937", padding:"16px 20px", display:"flex", flexDirection:"column", gap:14 }}>
+                      {/* Editar saldo */}
+                      <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+                        <span style={{ fontSize:12, color:"#6b7280" }}>Actualizar saldo:</span>
+                        <input type="number" defaultValue={p.saldo}
+                          onBlur={e=>actualizarSaldo(p.id,e.target.value)}
+                          style={{ width:130, background:"#1f2937", border:"1px solid #374151", color:"#e2e8f0", padding:"5px 10px", borderRadius:7, fontSize:13 }}/>
+                        <button onClick={()=>eliminarProveedor(p.id)} style={{
+                          marginLeft:"auto", background:"#450a0a44", border:"1px solid #ef444433",
+                          color:"#ef4444", padding:"5px 14px", borderRadius:7, cursor:"pointer", fontSize:12
+                        }}>Eliminar proveedor</button>
+                      </div>
+
+                      {/* Agregar novedad */}
+                      <div style={{ background:"#0d1117", borderRadius:10, padding:14 }}>
+                        <div style={{ fontSize:12, fontWeight:600, marginBottom:10, color:"#9ca3af" }}>Nueva novedad</div>
+                        <div style={{ display:"flex", gap:8 }}>
+                          <select value={novedadForm.tipo}
+                            onChange={e=>setNovedadForm(f=>({...f,tipo:e.target.value}))}
+                            style={{ background:"#1f2937", border:"1px solid #374151", color:"#e2e8f0", padding:"6px 10px", borderRadius:7, fontSize:12, flexShrink:0 }}>
+                            <option value="info">ℹ️ Info</option>
+                            <option value="alerta">⚠️ Alerta</option>
+                            <option value="sinstock">🚫 Sin stock</option>
+                            <option value="cambio">🔄 Cambio</option>
+                          </select>
+                          <input type="text" placeholder="Ej: Se quedó sin talles S en remeras negras"
+                            value={novedadForm.texto}
+                            onChange={e=>setNovedadForm(f=>({...f,texto:e.target.value}))}
+                            onKeyDown={e=>e.key==="Enter"&&agregarNovedad(p.id)}
+                            style={{ flex:1, background:"#1f2937", border:"1px solid #374151", color:"#e2e8f0", padding:"6px 10px", borderRadius:7, fontSize:13 }}/>
+                          <button onClick={()=>agregarNovedad(p.id)} style={{
+                            background:"linear-gradient(135deg,#3b82f6,#8b5cf6)", border:"none",
+                            color:"white", padding:"6px 14px", borderRadius:7, cursor:"pointer", fontSize:12, flexShrink:0
+                          }}>Agregar</button>
+                        </div>
+                      </div>
+
+                      {/* Historial de novedades */}
+                      {(p.novedades||[]).length > 0 && (
+                        <div>
+                          <div style={{ fontSize:12, color:"#6b7280", marginBottom:8 }}>Historial</div>
+                          {p.novedades.map((n,i)=>{
+                            const tc = {info:{color:"#60a5fa",icon:"ℹ️"},alerta:{color:"#f59e0b",icon:"⚠️"},sinstock:{color:"#ef4444",icon:"🚫"},cambio:{color:"#a78bfa",icon:"🔄"}}[n.tipo]||{color:"#60a5fa",icon:"ℹ️"};
+                            return (
+                              <div key={n.id} style={{ display:"flex", gap:10, padding:"8px 0", borderBottom: i<p.novedades.length-1?"1px solid #1f293744":"none" }}>
+                                <span>{tc.icon}</span>
+                                <div style={{ flex:1 }}>
+                                  <span style={{ fontSize:13, color:"#e2e8f0" }}>{n.texto}</span>
+                                  <span style={{ fontSize:10, color:"#4b5563", marginLeft:8 }}>{n.fecha}</span>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
+        </div>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
