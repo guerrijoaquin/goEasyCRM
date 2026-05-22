@@ -1,7 +1,7 @@
 'use client'
 export const dynamic = 'force-dynamic';
 
-import { useState, useEffect, useTransition } from 'react';
+import { useState, useEffect, useTransition, useRef } from 'react';
 import type { Product } from '@/lib/types';
 
 export default function StockPage() {
@@ -12,6 +12,9 @@ export default function StockPage() {
   const [form, setForm] = useState({
     name: '', sku: '', price: '', cost: '', stock: '', min_stock: '', category: '', channels: 'tiendanube',
   });
+  const [importing, setImporting] = useState(false);
+  const [importResult, setImportResult] = useState<{ inserted: number; errors: string[] } | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const fetchProducts = async () => {
     const res = await fetch('/api/stock');
@@ -38,6 +41,26 @@ export default function StockPage() {
     setProducts(p => p.filter(x => x.id !== id));
   };
 
+  const handleDownloadTemplate = () => {
+    window.location.href = '/api/stock/template';
+  };
+
+  const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setImporting(true);
+    setImportResult(null);
+    const fd = new FormData();
+    fd.append('file', file);
+    const res = await fetch('/api/stock/import', { method: 'POST', body: fd });
+    const data = await res.json();
+    setImportResult(data);
+    setImporting(false);
+    if (data.inserted > 0) fetchProducts();
+    // Reset input so same file can be re-uploaded
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
   const alerts = products.filter(p => p.stock <= p.min_stock);
 
   return (
@@ -59,21 +82,75 @@ export default function StockPage() {
         ))}
       </div>
 
-      {/* Header + Botón */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      {/* Header + Botones */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
         <div style={{ fontWeight: 700, fontSize: 16, color: '#f1f5f9' }}>Inventario de productos</div>
-        <button
-          onClick={() => setShowForm(!showForm)}
-          className="btn-primary"
-          style={{
-            background: 'linear-gradient(135deg,#3b82f6,#8b5cf6)',
-            border: 'none', color: 'white', padding: '8px 18px',
-            borderRadius: 10, cursor: 'pointer', fontWeight: 600, fontSize: 13,
-          }}
-        >
-          {showForm ? '✕ Cancelar' : '+ Agregar producto'}
-        </button>
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+          {/* Descargar plantilla */}
+          <button
+            onClick={handleDownloadTemplate}
+            style={{
+              background: '#1f2937', border: '1px solid #374151', color: '#9ca3af',
+              padding: '8px 14px', borderRadius: 10, cursor: 'pointer', fontWeight: 600,
+              fontSize: 13, display: 'flex', alignItems: 'center', gap: 6,
+            }}
+          >
+            📥 Descargar plantilla
+          </button>
+
+          {/* Input oculto para subir excel */}
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".xlsx,.xls"
+            style={{ display: 'none' }}
+            onChange={handleImport}
+          />
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            disabled={importing}
+            style={{
+              background: importing ? '#374151' : '#064e3b',
+              border: '1px solid #065f46', color: importing ? '#6b7280' : '#34d399',
+              padding: '8px 14px', borderRadius: 10, cursor: importing ? 'default' : 'pointer',
+              fontWeight: 600, fontSize: 13, display: 'flex', alignItems: 'center', gap: 6,
+            }}
+          >
+            {importing ? '⏳ Importando...' : '📤 Importar Excel'}
+          </button>
+
+          <button
+            onClick={() => setShowForm(!showForm)}
+            className="btn-primary"
+            style={{
+              background: 'linear-gradient(135deg,#3b82f6,#8b5cf6)',
+              border: 'none', color: 'white', padding: '8px 18px',
+              borderRadius: 10, cursor: 'pointer', fontWeight: 600, fontSize: 13,
+            }}
+          >
+            {showForm ? '✕ Cancelar' : '+ Agregar producto'}
+          </button>
+        </div>
       </div>
+
+      {/* Resultado de importación */}
+      {importResult && (
+        <div style={{
+          background: importResult.errors.length > 0 ? '#451a0388' : '#052e1688',
+          border: `1px solid ${importResult.errors.length > 0 ? '#92400e55' : '#065f4655'}`,
+          borderRadius: 10, padding: '14px 18px',
+        }}>
+          <div style={{ fontWeight: 600, fontSize: 13, color: importResult.errors.length > 0 ? '#fbbf24' : '#34d399', marginBottom: importResult.errors.length > 0 ? 8 : 0 }}>
+            ✓ {importResult.inserted} producto{importResult.inserted !== 1 ? 's' : ''} importado{importResult.inserted !== 1 ? 's' : ''} correctamente
+          </div>
+          {importResult.errors.length > 0 && (
+            <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12, color: '#f87171' }}>
+              {importResult.errors.map((e, i) => <li key={i}>{e}</li>)}
+            </ul>
+          )}
+          <button onClick={() => setImportResult(null)} style={{ marginTop: 8, background: 'none', border: 'none', color: '#6b7280', cursor: 'pointer', fontSize: 12 }}>Cerrar</button>
+        </div>
+      )}
 
       {/* Formulario */}
       {showForm && (
