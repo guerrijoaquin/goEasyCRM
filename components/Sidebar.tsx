@@ -11,15 +11,16 @@ interface SidebarProps {
 }
 
 const tabs = [
-  { id: 'dashboard',     href: '/dashboard',     label: 'Dashboard',     icon: '⊞' },
-  { id: 'stock',         href: '/stock',         label: 'Stock',         icon: '📦' },
-  { id: 'envios',        href: '/envios',        label: 'Pedidos',       icon: '🚚' },
-  { id: 'clientes',      href: '/clientes',      label: 'Clientes',      icon: '👥' },
-  { id: 'gastos',        href: '/gastos',        label: 'Gastos',        icon: '💸' },
-  { id: 'rentabilidad',  href: '/rentabilidad',  label: 'Rentabilidad',  icon: '📈' },
-  { id: 'proveedores',   href: '/proveedores',   label: 'Proveedores',   icon: '🤝' },
-  { id: 'publicidad',    href: '/publicidad',    label: 'Publicidad',    icon: '📣' },
-  { id: 'impositivo',    href: '/impositivo',    label: 'ARCA',          icon: '📋' },
+  { id: 'dashboard',      href: '/dashboard',      label: 'Dashboard',     icon: '⊞' },
+  { id: 'stock',          href: '/stock',          label: 'Stock',         icon: '📦' },
+  { id: 'envios',         href: '/envios',         label: 'Pedidos',       icon: '🚚' },
+  { id: 'clientes',       href: '/clientes',       label: 'Clientes',      icon: '👥' },
+  { id: 'gastos',         href: '/gastos',         label: 'Gastos',        icon: '💸' },
+  { id: 'rentabilidad',   href: '/rentabilidad',   label: 'Rentabilidad',  icon: '📈' },
+  { id: 'proveedores',    href: '/proveedores',    label: 'Proveedores',   icon: '🤝' },
+  { id: 'publicidad',     href: '/publicidad',     label: 'Publicidad',    icon: '📣' },
+  { id: 'impositivo',     href: '/impositivo',     label: 'ARCA',          icon: '📋' },
+  { id: 'integraciones',  href: '/integraciones',  label: 'Integraciones', icon: '🔌' },
 ];
 
 export default function Sidebar({ business, stockAlerts = 0, userType }: SidebarProps) {
