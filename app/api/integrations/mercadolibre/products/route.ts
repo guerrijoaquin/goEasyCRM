@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getTokenFromRequest } from '@/lib/auth';
 import { getIntegration } from '@/lib/integrations';
 
-const PAGE_SIZE = 50;
+const PAGE_SIZE = 30;
 
 export async function GET(req: NextRequest) {
   const payload = getTokenFromRequest(req);

@@ -15,7 +15,7 @@ export async function GET(req: NextRequest) {
   const page = Math.max(1, parseInt(req.nextUrl.searchParams.get('page') ?? '1', 10));
 
   const res = await fetch(
-    `https://api.tiendanube.com/v1/${external_id}/products?per_page=50&page=${page}`,
+    `https://api.tiendanube.com/v1/${external_id}/products?per_page=30&page=${page}`,
     {
       headers: {
         Authorization: `${tokenType} ${access_token}`,
