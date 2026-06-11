@@ -20,7 +20,6 @@ const ORDER_STATUSES: Record<string, { label: string; color: string }> = {
 
 // ── Shared sub-components ──────────────────────────────────────────────────────
 function Pagination({ page, pages, onPage }: { page: number; pages: number; onPage: (p: number) => void }) {
-  if (pages <= 1) return null;
   return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, padding: '12px 0' }}>
       <button onClick={() => onPage(page - 1)} disabled={page <= 1} style={{ background: '#1f2937', border: '1px solid #374151', color: page <= 1 ? '#4b5563' : '#9ca3af', padding: '6px 14px', borderRadius: 8, cursor: page <= 1 ? 'default' : 'pointer', fontSize: 13 }}>← Anterior</button>
