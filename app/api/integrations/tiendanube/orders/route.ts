@@ -3,7 +3,8 @@ import { getTokenFromRequest } from '@/lib/auth';
 import { getIntegration } from '@/lib/integrations';
 
 export async function GET(req: NextRequest) {
-  const payload = getTokenFromRequest(req);
+  try {
+const payload = getTokenFromRequest(req);
   if (!payload?.businessId) return NextResponse.json({ error: 'Sin negocio' }, { status: 403 });
 
   const integration = await getIntegration(payload.businessId, 'tiendanube');
@@ -45,4 +46,8 @@ export async function GET(req: NextRequest) {
   }));
 
   return NextResponse.json({ orders, page, hasNext, total });
+  } catch (error) {
+    console.error('Error fetching orders from Tiendanube:', error);
+    return NextResponse.json({ error: 'Error al consultar Tiendanube' }, { status: 502 });
+  }
 }
