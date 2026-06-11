@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getTokenFromRequest } from '@/lib/auth';
 import { getIntegration } from '@/lib/integrations';
 
+const PAGE_SIZE = 50;
+
 export async function GET(req: NextRequest) {
   const payload = getTokenFromRequest(req);
   if (!payload?.businessId) return NextResponse.json({ error: 'Sin negocio' }, { status: 403 });
@@ -10,10 +12,11 @@ export async function GET(req: NextRequest) {
   if (!integration) return NextResponse.json({ error: 'No conectado a MercadoLibre' }, { status: 404 });
 
   const { access_token, external_id } = integration;
+  const page = Math.max(1, parseInt(req.nextUrl.searchParams.get('page') ?? '1', 10));
+  const offset = (page - 1) * PAGE_SIZE;
 
-  // Buscar todos los items activos del vendedor
   const searchRes = await fetch(
-    `https://api.mercadolibre.com/users/${external_id}/items/search?status=active&limit=50`,
+    `https://api.mercadolibre.com/users/${external_id}/items/search?status=active&limit=${PAGE_SIZE}&offset=${offset}`,
     { headers: { Authorization: `Bearer ${access_token}` } },
   );
 
@@ -23,9 +26,11 @@ export async function GET(req: NextRequest) {
 
   const searchData = await searchRes.json();
   const itemIds: string[] = searchData.results ?? [];
+  const total: number = searchData.paging?.total ?? 0;
+  const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   if (itemIds.length === 0) {
-    return NextResponse.json([]);
+    return NextResponse.json({ products: [], total, page, pages });
   }
 
   // Obtener detalles en batch (máx 20 por request)
@@ -51,13 +56,13 @@ export async function GET(req: NextRequest) {
           sku: b.seller_sku ?? null,
           price: b.price ?? 0,
           stock: b.available_quantity ?? 0,
+          status: b.status ?? 'active',
           image_url: b.thumbnail ?? null,
           url: b.permalink ?? null,
-          category_id: b.category_id ?? null,
         });
       }
     }
   }
 
-  return NextResponse.json(products);
+  return NextResponse.json({ products, total, page, pages });
 }
