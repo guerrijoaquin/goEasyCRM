@@ -47,7 +47,7 @@ const payload = getTokenFromRequest(req);
 
   return NextResponse.json({ orders, page, hasNext, total });
   } catch (error) {
-    console.error('Error fetching orders from Tiendanube:', error);
+    console.log('Error fetching orders from Tiendanube:', error);
     return NextResponse.json({ error: 'Error al consultar Tiendanube' }, { status: 502 });
   }
 }
