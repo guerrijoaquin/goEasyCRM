@@ -7,7 +7,8 @@ import { useSearchParams } from 'next/navigation';
 // ── Types ──────────────────────────────────────────────────────────────────────
 interface TNProduct { external_id: string; name: string; sku: string | null; price: number; stock: number; image_url: string | null; url: string | null; }
 interface TNOrder { id: number; number: string; date: string; status: string; payment_status: string; total: number; currency: string; customer: string; email: string | null; products_count: number; }
-type Tab = 'productos' | 'ventas';
+interface TNCustomer { id: number; name: string; email: string | null; phone: string | null; city: string | null; province: string | null; country: string | null; total_spent: number; orders_count: number; created_at: string; }
+type Tab = 'productos' | 'ventas' | 'clientes';
 
 const ORDER_STATUSES: Record<string, { label: string; color: string }> = {
   open: { label: 'Abierta', color: '#3b82f6' },
@@ -56,6 +57,12 @@ export default function TiendaNubePage() {
   const [ordTotal, setOrdTotal] = useState<number | null>(null);
   const [loadingOrd, setLoadingOrd] = useState(false);
 
+  const [customers, setCustomers] = useState<TNCustomer[]>([]);
+  const [custPage, setCustPage] = useState(1);
+  const [custHasNext, setCustHasNext] = useState(false);
+  const [custTotal, setCustTotal] = useState<number | null>(null);
+  const [loadingCust, setLoadingCust] = useState(false);
+
   useEffect(() => {
     fetch('/api/integrations').then(r => r.json()).then(data => {
       const tn = Array.isArray(data) ? data.find((i: { provider: string; meta?: { storeName?: string } }) => i.provider === 'tiendanube') : null;
@@ -79,17 +86,26 @@ export default function TiendaNubePage() {
     } finally { setLoadingOrd(false); }
   }, []);
 
+  const loadCustomers = useCallback(async (page: number) => {
+    setLoadingCust(true);
+    try {
+      const r = await fetch(`/api/integrations/tiendanube/customers?page=${page}`);
+      if (r.ok) { const d = await r.json(); setCustomers(d.customers ?? []); setCustHasNext(d.hasNext ?? false); setCustTotal(d.total ?? null); setCustPage(page); }
+    } finally { setLoadingCust(false); }
+  }, []);
+
   useEffect(() => {
     if (!integration) return;
     if (tab === 'productos' && products.length === 0) loadProducts(1);
     if (tab === 'ventas' && orders.length === 0) loadOrders(1);
+    if (tab === 'clientes' && customers.length === 0) loadCustomers(1);
   }, [tab, integration]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleDisconnect = async () => {
     if (!confirm('¿Desconectar Tienda Nube?')) return;
     setDisconnecting(true);
     await fetch('/api/integrations/tiendanube/disconnect', { method: 'DELETE' });
-    setIntegration(null); setProducts([]); setOrders([]);
+    setIntegration(null); setProducts([]); setOrders([]); setCustomers([]);
     setDisconnecting(false);
   };
 
@@ -153,6 +169,7 @@ export default function TiendaNubePage() {
             {([
               { id: 'productos' as Tab, label: '📦 Productos', total: prodTotal },
               { id: 'ventas' as Tab, label: '💰 Pedidos', total: ordTotal },
+              { id: 'clientes' as Tab, label: '👥 Clientes', total: custTotal },
             ]).map(t => (
               <button key={t.id} onClick={() => setTab(t.id)} style={{ flex: 1, padding: '9px 12px', borderRadius: 9, border: 'none', cursor: 'pointer', background: tab === t.id ? 'linear-gradient(145deg,#111827,#0f1623)' : 'transparent', color: tab === t.id ? '#f1f5f9' : '#6b7280', fontWeight: tab === t.id ? 700 : 500, fontSize: 13, transition: 'all 0.15s' }}>
                 {t.label}{t.total !== null && t.total > 0 && <span style={{ marginLeft: 5, fontSize: 11, color: tab === t.id ? '#00b1e1' : '#4b5563' }}>({t.total})</span>}
@@ -216,6 +233,35 @@ export default function TiendaNubePage() {
                     );
                   })}
                   <Pagination page={ordPage} hasNext={ordHasNext} onPage={loadOrders} />
+                </>
+              )}
+            </div>
+          )}
+
+          {/* Customers */}
+          {tab === 'clientes' && (
+            <div className="card" style={{ padding: 22, display: 'flex', flexDirection: 'column', gap: 14 }}>
+              {loadingCust ? <Loading /> : customers.length === 0 ? <Empty msg="No hay clientes registrados." /> : (
+                <>
+                  {custTotal !== null && <div style={{ fontSize: 12, color: '#6b7280' }}>{custTotal} clientes encontrados</div>}
+                  <div style={{ display: 'grid', gridTemplateColumns: '2fr 2fr 1fr 1fr 100px', padding: '6px 12px', fontSize: 11, color: '#6b7280', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.6px' }}>
+                    <span>Nombre</span><span>Email</span><span>Ubicación</span><span style={{ textAlign: 'right' }}>Total gastado</span><span style={{ textAlign: 'center' }}>Órdenes</span>
+                  </div>
+                  {customers.map((c, i) => (
+                    <div key={c.id} style={{ display: 'grid', gridTemplateColumns: '2fr 2fr 1fr 1fr 100px', padding: '12px', alignItems: 'center', borderBottom: i < customers.length - 1 ? '1px solid #1f2937' : 'none' }}>
+                      <div>
+                        <div style={{ fontSize: 13, color: '#e2e8f0', fontWeight: 500 }}>{c.name}</div>
+                        {c.phone && <div style={{ fontSize: 11, color: '#6b7280' }}>{c.phone}</div>}
+                      </div>
+                      <span style={{ fontSize: 12, color: '#9ca3af', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', paddingRight: 12 }}>{c.email ?? '—'}</span>
+                      <span style={{ fontSize: 12, color: '#6b7280' }}>{[c.city, c.province].filter(Boolean).join(', ') || '—'}</span>
+                      <span style={{ fontSize: 13, fontWeight: 700, color: '#f1f5f9', textAlign: 'right' }}>${Number(c.total_spent).toLocaleString('es-AR')}</span>
+                      <div style={{ textAlign: 'center' }}>
+                        <span style={{ fontSize: 12, fontWeight: 600, padding: '3px 10px', borderRadius: 20, background: '#1f2937', color: '#9ca3af', border: '1px solid #374151' }}>{c.orders_count}</span>
+                      </div>
+                    </div>
+                  ))}
+                  <Pagination page={custPage} hasNext={custHasNext} onPage={loadCustomers} />
                 </>
               )}
             </div>
