@@ -27,7 +27,6 @@ export async function GET(req: NextRequest) {
       client_secret: process.env.TN_CLIENT_SECRET!,
       grant_type: 'authorization_code',
       code,
-      scope: 'read_products,write_products,read_orders,write_orders,read_customers,write_customers',
     }),
   });
 
@@ -37,7 +36,14 @@ export async function GET(req: NextRequest) {
   }
 
   const tokenData = await tokenRes.json();
+  console.log('[tn callback] token response keys:', Object.keys(tokenData));
+
   const { access_token, token_type, user_id } = tokenData;
+
+  if (!access_token || !user_id) {
+    console.error('[tn callback] missing access_token or user_id:', tokenData);
+    return NextResponse.redirect(`${appUrl}/integraciones?error=tn_token`);
+  }
 
   // Obtener info de la tienda
   let storeName = '';
