@@ -27,6 +27,7 @@ export async function GET(req: NextRequest) {
       client_secret: process.env.TN_CLIENT_SECRET!,
       grant_type: 'authorization_code',
       code,
+      scopes: 'read_products,write_products,read_orders,write_orders,read_customers,write_customers',
     }),
   });
 
